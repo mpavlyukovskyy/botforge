@@ -69,6 +69,8 @@ const ClaudeBrainSchema = z.object({
   tools: z.array(z.string()).default([]),
   temperature: z.number().min(0).max(1).default(0),
   max_tokens: z.number().positive().default(4096),
+  max_iterations: z.number().positive().optional().describe('Max agentic turns (maps to SDK maxTurns)'),
+  max_budget_usd: z.number().positive().optional().describe('Max cost per query in USD'),
 });
 
 const GeminiBrainSchema = z.object({

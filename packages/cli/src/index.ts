@@ -14,7 +14,8 @@ import { Command } from 'commander';
 import { loadConfig } from '@botforge/core';
 import { startBot } from '@botforge/core';
 import { createTelegramAdapter } from '@botforge/adapter-telegram';
-import { resolve } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
 
 const program = new Command();
 
@@ -28,11 +29,38 @@ program
 program
   .command('dev <config>')
   .description('Run a bot locally in dev mode')
-  .action(async (configPath: string) => {
+  .option('--echo', 'Force echo mode (no LLM calls)')
+  .option('--dry-run', 'Validate config and boot adapter without connecting')
+  .action(async (configPath: string, opts: { echo?: boolean; dryRun?: boolean }) => {
     const absPath = resolve(configPath);
     console.log(`Starting bot from ${absPath}...`);
 
     try {
+      // Detect tools directory
+      const configDir = dirname(absPath);
+      const configName = absPath.replace(/\.ya?ml$/, '').split('/').pop()!;
+      const possibleToolsDirs = [
+        join(configDir, configName, 'tools'),
+        join(configDir, 'tools'),
+      ];
+      const toolsDir = possibleToolsDirs.find(d => existsSync(d));
+
+      // Default skill loader
+      const loadSkill = async (name: string) => {
+        const mod = await import(`@botforge/skill-${name}`);
+        return mod.default ?? mod.createSkill();
+      };
+
+      if (opts.dryRun) {
+        const config = loadConfig(absPath);
+        console.log(`Config valid: ${config.name} v${config.version}`);
+        console.log(`  Platform: ${config.platform.type}`);
+        console.log(`  Brain: ${config.brain.provider} / ${config.brain.model}`);
+        console.log(`  Tools: ${config.brain.tools.length}`);
+        if (toolsDir) console.log(`  Tools dir: ${toolsDir}`);
+        return;
+      }
+
       const instance = await startBot(absPath, {
         createAdapter: (config, log) => {
           switch (config.platform.type) {
@@ -42,14 +70,9 @@ program
               throw new Error(`Unsupported platform: ${config.platform.type}`);
           }
         },
-        messageProcessor: async (message, bot) => {
-          // Default echo processor for dev mode
-          const responseText = `[${bot.config.name}] Received: ${message.text ?? '[non-text message]'}`;
-          await bot.adapter.send({
-            chatId: message.chatId,
-            text: responseText,
-          });
-        },
+        loadSkill,
+        toolsDir,
+        echo: opts.echo,
       });
 
       console.log(`Bot "${instance.config.name}" is running. Press Ctrl+C to stop.`);
@@ -106,11 +129,6 @@ program
   .command('validate-all')
   .description('Validate all bot configs in the bots/ directory')
   .action(async () => {
-    const { globSync } = await import('node:fs');
-    // Use a simple approach
-    const { readdirSync } = await import('node:fs');
-    const { join } = await import('node:path');
-
     const botsDir = resolve('bots');
     let files: string[];
     try {

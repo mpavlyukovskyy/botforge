@@ -5,13 +5,23 @@
 import type { BotConfig } from './schema.js';
 import type { PlatformAdapter } from './adapter.js';
 
+/**
+ * Database abstraction to avoid circular dependency between core↔storage-sqlite.
+ * SqliteStorage's `.db` property satisfies this interface.
+ */
+export interface DatabaseLike {
+  run(sql: string, ...params: unknown[]): unknown;
+  prepare(sql: string): unknown;
+  close(): void;
+}
+
 export interface SkillContext {
   config: BotConfig;
   adapter: PlatformAdapter;
   /** Log function scoped to the bot */
   log: Logger;
   /** SQLite database (if storage is enabled) */
-  db?: unknown;
+  db?: DatabaseLike;
   /** Reference to other loaded skills */
   skills: Map<string, Skill>;
 }

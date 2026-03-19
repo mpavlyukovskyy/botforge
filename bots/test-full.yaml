@@ -1,0 +1,46 @@
+name: test-full
+version: "1.0"
+description: Test bot with all skills enabled
+
+platform:
+  type: telegram
+  token: ${TEST_BOT_TOKEN}
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-sonnet-4-6
+  system_prompt: "You are a test bot with all features enabled. Be brief."
+  max_iterations: 3
+  max_budget_usd: 0.50
+  tools:
+    - get_time
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 7
+    max_messages: 50
+  context_blocks:
+    - type: recent_history
+      label: recent_conversation_history
+
+resilience:
+  circuit_breaker:
+    threshold: 3
+    reset_timeout_ms: 15000
+
+schedule:
+  conversation_cleanup:
+    cron: "0 4 * * *"
+    timezone: UTC
+
+health:
+  port: 9003
+  path: /api/health
+
+passive_detection:
+  keywords: ["test", "bot"]
+  case_sensitive: false
+
+env_file: ../.env

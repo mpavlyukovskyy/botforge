@@ -1,0 +1,23 @@
+name: test-claude
+version: "1.0"
+description: Test bot with Claude brain and tool calling
+
+platform:
+  type: telegram
+  token: ${TEST_BOT_TOKEN}
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-sonnet-4-6
+  system_prompt: "You are a test bot. Be brief and helpful. Use tools when asked."
+  max_iterations: 3
+  max_budget_usd: 0.50
+  tools:
+    - get_time
+
+health:
+  port: 9002
+  path: /api/health
+
+env_file: ../.env
