@@ -16,6 +16,13 @@ import { startBot } from '@botforge/core';
 import { createTelegramAdapter } from '@botforge/adapter-telegram';
 import { resolve, dirname, join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
+import { deploy } from './commands/deploy.js';
+import { rollback } from './commands/rollback.js';
+import { status } from './commands/status.js';
+import { logs } from './commands/logs.js';
+import { systemd } from './commands/systemd.js';
+import { build } from './commands/build.js';
+import { create } from './commands/create.js';
 
 const program = new Command();
 
@@ -117,11 +124,53 @@ program
 program
   .command('status')
   .description('Show fleet status by querying health endpoints')
-  .action(async () => {
-    // TODO: Read fleet config, query each bot's health endpoint
-    console.log('Fleet status (coming soon)');
-    console.log('This will query health endpoints of all deployed bots.');
-  });
+  .action(() => status());
+
+// ─── deploy ──────────────────────────────────────────────────────────────────
+
+program
+  .command('deploy <bot>')
+  .description('Build, upload, and deploy a bot to the fleet server')
+  .action((bot: string) => deploy(bot));
+
+// ─── rollback ────────────────────────────────────────────────────────────────
+
+program
+  .command('rollback <bot>')
+  .description('Roll back a bot to its previous version')
+  .action((bot: string) => rollback(bot));
+
+// ─── logs ────────────────────────────────────────────────────────────────────
+
+program
+  .command('logs <bot>')
+  .description('View bot logs from the fleet server')
+  .option('-f, --follow', 'Follow log output')
+  .option('-n, --lines <n>', 'Number of lines to show', '50')
+  .action((bot: string, opts: { follow?: boolean; lines?: string }) =>
+    logs(bot, { follow: opts.follow, lines: parseInt(opts.lines ?? '50') }));
+
+// ─── build ───────────────────────────────────────────────────────────────────
+
+program
+  .command('build <bot>')
+  .description('Build a bot for deployment')
+  .action((bot: string) => build(bot));
+
+// ─── systemd ─────────────────────────────────────────────────────────────────
+
+program
+  .command('systemd <bot>')
+  .description('Generate a systemd service file for a bot')
+  .action((bot: string) => systemd(bot));
+
+// ─── create ──────────────────────────────────────────────────────────────────
+
+program
+  .command('create <name>')
+  .description('Scaffold a new bot from a template')
+  .option('-t, --template <type>', 'Template type (echo, full)', 'echo')
+  .action((name: string, opts: { template?: string }) => create(name, opts));
 
 // ─── validate-all ────────────────────────────────────────────────────────────
 

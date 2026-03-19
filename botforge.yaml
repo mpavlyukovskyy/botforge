@@ -1,0 +1,35 @@
+fleet:
+  server: openclaw
+  ssh_host: ${OPENCLAW_SSH_HOST}
+  ssh_user: root
+  base_dir: /opt/botforge
+
+bots:
+  kristina:
+    config: bots/kristina.yaml
+    service: botforge-kristina
+    port: 8087
+  atlas:
+    config: bots/atlas.yaml
+    service: botforge-atlas
+    port: 8086
+  maia:
+    config: bots/maia.yaml
+    service: botforge-maia
+    port: 3100
+  harry:
+    config: bots/harry.yaml
+    service: botforge-harry
+    port: 8082
+  babushka:
+    config: bots/babushka.yaml
+    service: botforge-babushka
+    port: 8085
+  ashley:
+    config: bots/ashley.yaml
+    service: botforge-ashley
+    port: 8084
+  alfred:
+    config: bots/alfred.yaml
+    service: botforge-alfred
+    port: 8088
