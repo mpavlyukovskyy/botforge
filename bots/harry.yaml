@@ -1,0 +1,100 @@
+name: Harry
+version: "1.0"
+description: LP reply management for NZVC Instantly campaigns
+
+platform:
+  type: telegram
+  token: ${TELEGRAM_BOT_TOKEN}
+  chat_ids: ["${TELEGRAM_CHAT_ID}"]
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/harry.md
+  tools:
+    - approve_email
+    - search_lps
+    - get_lp_detail
+    - send_email
+    - snooze_lp
+    - get_email_detail
+    - get_calendar
+    - update_lp_status
+    - draft_reply
+    - get_queue
+    - sync_instantly
+    - manage_memory
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 14
+    max_messages: 100
+    strip_action_lines: true
+  context_blocks:
+    - type: sentiment_snapshot
+      label: sentiment_snapshot
+    - type: oldest_pending
+      label: oldest_pending
+    - type: recent_lp_interactions
+      label: recent_lp_interactions
+    - type: recent_history
+      label: recent_conversation_history
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  daily_digest:
+    cron: "0 8 * * *"
+    timezone: Pacific/Auckland
+  sla_check:
+    cron: "*/15 * * * *"
+    timezone: UTC
+  follow_ups:
+    cron: "0 * * * *"
+    timezone: UTC
+  instantly_poll:
+    cron: "5 * * * *"
+    timezone: UTC
+  spok_retry:
+    cron: "*/15 * * * *"
+    timezone: UTC
+  suppression_sync:
+    cron: "0 6 * * *"
+    timezone: Pacific/Auckland
+  stale_check:
+    cron: "0 */2 * * *"
+    timezone: UTC
+  buttondown_sync:
+    cron: "0 5 * * *"
+    timezone: Pacific/Auckland
+  conversation_cleanup:
+    cron: "0 3 * * *"
+    timezone: UTC
+
+integrations:
+  spok:
+    url: https://spok.vc
+    token: ${SPOK_API_TOKEN}
+  instantly:
+    url: ${INSTANTLY_API_URL}
+    token: ${INSTANTLY_API_KEY}
+  buttondown:
+    url: https://api.buttondown.email
+    token: ${BUTTONDOWN_API_KEY}
+
+health:
+  port: 8082
+  path: /api/health
+
+env_file: ../.env

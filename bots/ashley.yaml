@@ -1,0 +1,44 @@
+name: Ashley
+version: "1.0"
+description: Findlays email classification + Telegram notifications
+
+platform:
+  type: email
+  imap_host: ${IMAP_HOST}
+  imap_port: 993
+  imap_user: ${IMAP_USER}
+  imap_password: ${IMAP_PASSWORD}
+  folders: ["INBOX"]
+  idle: true
+
+brain:
+  provider: gemini
+  model: gemini-2.0-flash
+  system_prompt_file: prompts/ashley.md
+  temperature: 0
+  max_tokens: 2048
+
+memory:
+  conversation_history:
+    enabled: false
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+integrations:
+  telegram:
+    url: https://api.telegram.org
+    token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+
+health:
+  port: 8084
+  path: /api/health
+
+env_file: ../.env

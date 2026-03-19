@@ -1,0 +1,72 @@
+name: Kristina
+version: "1.0"
+description: Mark's personal task assistant, syncs to Atlas task board
+
+platform:
+  type: telegram
+  token: ${TELEGRAM_BOT_TOKEN}
+  chat_ids: ["${TELEGRAM_CHAT_ID}"]
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-opus-4-6
+  system_prompt_file: prompts/kristina.md
+  tools:
+    - query_board
+    - create_task
+    - update_task
+    - mark_done
+    - delete_task
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 14
+    max_messages: 100
+  context_blocks:
+    - type: board_state
+      label: active_tasks
+    - type: recent_history
+      label: recent_conversation_history
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  daily_digest:
+    cron: "30 8 * * *"
+    timezone: America/New_York
+  auto_archive:
+    cron: "0 8 * * *"
+    timezone: America/New_York
+  conversation_cleanup:
+    cron: "0 4 * * *"
+    timezone: America/New_York
+  sync_retry:
+    cron: "*/5 * * * *"
+    timezone: UTC
+
+integrations:
+  atlas:
+    url: https://mp-atlas.fly.dev
+    sync_endpoint: /api/sync/kristina-bot/items
+    token: ${ATLAS_SYNC_KEY}
+
+health:
+  port: 8087
+  path: /api/health
+
+passive_detection:
+  keywords: ["kristina"]
+  case_sensitive: false
+
+env_file: ../.env

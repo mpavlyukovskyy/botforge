@@ -1,0 +1,21 @@
+name: TestEcho
+version: "1.0"
+description: Minimal test bot that echoes messages back
+
+platform:
+  type: telegram
+  token: ${TEST_BOT_TOKEN}
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-haiku-4-5-20251001
+  system_prompt: "You are a test bot. Simply echo back whatever the user says, prefixed with 'Echo: '"
+  temperature: 0
+  max_tokens: 256
+
+health:
+  port: 9001
+  path: /api/health
+
+env_file: ../.env

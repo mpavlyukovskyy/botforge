@@ -1,0 +1,68 @@
+name: Maia
+version: "1.0"
+description: NZPE deal sourcing agent for Kauri Partners
+
+platform:
+  type: telegram
+  token: ${TELEGRAM_BOT_TOKEN}
+  chat_ids: ["${TELEGRAM_CHAT_ID}"]
+  mode: polling
+  local_bot_api: ${TELEGRAM_API_URL:-}
+
+brain:
+  provider: claude
+  model: claude-opus-4-6
+  system_prompt_file: prompts/maia.md
+  tools:
+    - search_deals
+    - score_deal
+    - get_deal_detail
+    - update_deal_status
+    - draft_email
+    - find_brokers
+    - get_pipeline
+    - upload_nda
+    - generate_pdf_report
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 14
+    max_messages: 100
+    strip_action_lines: true
+  context_blocks:
+    - type: recent_deal_events
+      label: recent_deal_events
+    - type: active_pipeline
+      label: active_pipeline
+    - type: overdue_followups
+      label: overdue_followups
+    - type: recent_history
+      label: recent_conversation_history
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  conversation_cleanup:
+    cron: "0 4 * * *"
+    timezone: Pacific/Auckland
+
+integrations:
+  spok:
+    url: https://spok.vc
+    token: ${SPOK_API_TOKEN}
+
+health:
+  port: 3100
+  path: /api/health
+
+env_file: ../.env

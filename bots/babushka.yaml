@@ -1,0 +1,64 @@
+name: Babushka
+version: "1.0"
+description: Memory preservation bot — processes grandma call recordings
+
+platform:
+  type: telegram
+  token: ${TELEGRAM_BOT_TOKEN}
+  chat_ids: ["381823289"]
+  mode: polling
+  local_bot_api: ${TELEGRAM_API_URL:-http://localhost:8081}
+
+brain:
+  provider: claude
+  model: claude-sonnet-4-6
+  system_prompt_file: prompts/babushka.md
+  tools:
+    - list_stories
+    - get_story
+    - search_knowledge
+    - get_family_tree
+    - get_follow_up_questions
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 30
+    max_messages: 50
+
+pipelines:
+  - name: audio_processing
+    trigger: voice_message
+    steps:
+      - name: transcribe
+        type: external
+        provider: openai
+        model: gpt-4o-transcribe
+        handler: transcribeAudio
+      - name: correct_names
+        type: llm
+        provider: claude
+        model: claude-haiku-4-5-20251001
+        handler: correctProperNouns
+      - name: extract_stories
+        type: llm
+        provider: claude
+        model: claude-sonnet-4-6
+        handler: extractStories
+      - name: build_knowledge_graph
+        type: transform
+        handler: updateKnowledgeGraph
+
+resilience:
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+health:
+  port: 8085
+  path: /api/health
+
+env_file: ../.env

@@ -1,0 +1,69 @@
+name: Alfred
+version: "1.0"
+description: Task tracking bot with web dashboard and Google Calendar integration
+
+platform:
+  type: telegram
+  token: ${TELEGRAM_BOT_TOKEN}
+  chat_ids: ["${TELEGRAM_CHAT_ID}"]
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-opus-4-6
+  system_prompt_file: prompts/alfred.md
+  tools:
+    - create_task
+    - update_task
+    - query_board
+    - mark_done
+    - delete_task
+    - get_calendar
+    - create_subtask
+    - attach_file
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 14
+    max_messages: 100
+  context_blocks:
+    - type: board_state
+      label: active_tasks
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  daily_digest:
+    cron: "30 8 * * *"
+    timezone: America/New_York
+  auto_archive:
+    cron: "0 8 * * *"
+    timezone: America/New_York
+  conversation_cleanup:
+    cron: "0 4 * * *"
+    timezone: UTC
+
+integrations:
+  google_calendar:
+    url: https://www.googleapis.com/calendar/v3
+    token: ${GOOGLE_CALENDAR_TOKEN}
+
+health:
+  port: 8088
+  path: /api/health
+
+passive_detection:
+  keywords: ["alfred"]
+  case_sensitive: false
+
+env_file: ../.env
