@@ -35,6 +35,30 @@ importers:
       '@botforge/core':
         specifier: workspace:*
         version: link:../core
+      '@botforge/skill-circuit-breaker':
+        specifier: workspace:*
+        version: link:../skills/circuit-breaker
+      '@botforge/skill-context-builder':
+        specifier: workspace:*
+        version: link:../skills/context-builder
+      '@botforge/skill-conversation-history':
+        specifier: workspace:*
+        version: link:../skills/conversation-history
+      '@botforge/skill-cron-scheduler':
+        specifier: workspace:*
+        version: link:../skills/cron-scheduler
+      '@botforge/skill-daily-digest':
+        specifier: workspace:*
+        version: link:../skills/daily-digest
+      '@botforge/skill-health-server':
+        specifier: workspace:*
+        version: link:../skills/health-server
+      '@botforge/skill-passive-detection':
+        specifier: workspace:*
+        version: link:../skills/passive-detection
+      '@botforge/skill-token-tracker':
+        specifier: workspace:*
+        version: link:../skills/token-tracker
       '@botforge/storage-sqlite':
         specifier: workspace:*
         version: link:../storage/sqlite

@@ -1,9 +1,7 @@
-import type { ToolImplementation } from '@botforge/core';
-
-const getTime: ToolImplementation = {
+const getTime = {
   name: 'get_time',
   description: 'Get the current date and time in ISO format',
-  schema: {},  // no parameters
+  schema: {},
   execute: async () => new Date().toISOString(),
 };
 
