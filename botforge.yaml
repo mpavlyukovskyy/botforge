@@ -33,3 +33,12 @@ bots:
     config: bots/alfred.yaml
     service: botforge-alfred
     port: 8088
+  test-echo:
+    config: bots/test-echo.yaml
+    port: 9001
+  test-claude:
+    config: bots/test-claude.yaml
+    port: 9002
+  test-full:
+    config: bots/test-full.yaml
+    port: 9003

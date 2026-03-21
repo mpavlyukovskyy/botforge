@@ -1,6 +1,6 @@
 export interface BotStatus {
   name: string;
-  status: 'healthy' | 'offline' | 'error' | 'deploying';
+  status: 'healthy' | 'online' | 'offline' | 'error' | 'deploying';
   uptime?: number;
   port: number;
   platform?: string;

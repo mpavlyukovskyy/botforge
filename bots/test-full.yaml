@@ -10,11 +10,15 @@ platform:
 brain:
   provider: claude
   model: claude-sonnet-4-6
-  system_prompt: "You are a test bot with all features enabled. Be brief."
+  system_prompt_file: prompts/test-full.md
   max_iterations: 3
   max_budget_usd: 0.50
   tools:
     - get_time
+    - echo_args
+    - get_status
+  temperature: 0
+  max_tokens: 4096
 
 memory:
   conversation_history:
@@ -29,10 +33,22 @@ resilience:
   circuit_breaker:
     threshold: 3
     reset_timeout_ms: 15000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    base_delay_ms: 1000
+    max_delay_ms: 30000
+    transient_codes: [429, 502, 503, 504]
 
 schedule:
   conversation_cleanup:
     cron: "0 4 * * *"
+    timezone: UTC
+  daily_digest:
+    cron: "30 9 * * *"
+    timezone: UTC
+  auto_archive:
+    cron: "0 10 * * *"
     timezone: UTC
 
 health:
