@@ -13,6 +13,8 @@ import type { BotConfig } from './schema.js';
 import { askBrain, type BrainResponse } from './brain.js';
 import { askGemini } from './brain-gemini.js';
 import { ToolRegistry, loadToolsFromDir, type ToolContext } from './tool-registry.js';
+import { withChatLock } from './chat-lock.js';
+import { shouldAllow } from './rate-limiter.js';
 
 export type AdapterFactory = (config: BotConfig, log: Logger) => PlatformAdapter;
 export type SkillFactory = (name: string) => Promise<Skill>;
@@ -27,6 +29,10 @@ export interface BotInstance {
   toolRegistry: ToolRegistry;
   /** Process an incoming message through the brain */
   processMessage?: MessageProcessor;
+  /** Bot's Telegram username (auto-detected or from config) */
+  botUsername?: string;
+  /** Bot's platform user ID (auto-detected) */
+  botId?: string;
 }
 
 export interface BotForgeOptions {
@@ -54,6 +60,9 @@ const SKILL_INIT_ORDER = [
   'context-builder',
   'circuit-breaker',
   'passive-detection',
+  'response-formatter',
+  'reply-context',
+  'pending-questions',
   'cron-scheduler',
   'daily-digest',
   'health-server',
@@ -66,7 +75,15 @@ function detectSkills(config: BotConfig): string[] {
   if (config.brain?.provider === 'claude') detected.add('token-tracker');
   if (config.memory?.context_blocks?.length) detected.add('context-builder');
   if (config.resilience?.circuit_breaker) detected.add('circuit-breaker');
-  if (config.passive_detection) detected.add('passive-detection');
+  // passive-detection: load if either old or new config has keywords/patterns
+  if (config.passive_detection
+      || config.behavior?.reception?.keywords?.length
+      || config.behavior?.reception?.patterns?.length) {
+    detected.add('passive-detection');
+  }
+  if (config.behavior?.response) detected.add('response-formatter');
+  if (config.behavior?.continuity?.reply_context) detected.add('reply-context');
+  if (config.behavior?.continuity?.pending_questions) detected.add('pending-questions');
   if (config.schedule) detected.add('cron-scheduler');
   if (config.schedule?.daily_digest) detected.add('daily-digest');
   if (config.health) detected.add('health-server');
@@ -104,7 +121,7 @@ function createBrainProcessor(
 ): MessageProcessor {
   return async (message: IncomingMessage, instance: BotInstance) => {
     if (!message.text) {
-      log.debug('Skipping non-text message');
+      log.debug(`Non-text message type "${message.type}" passed type filter; media handling not yet implemented`);
       return;
     }
 
@@ -131,11 +148,37 @@ function createBrainProcessor(
       }
     }
 
+    // Reply context injection
+    const replyCtxSkill = instance.skills.get('reply-context');
+    if (replyCtxSkill && 'getContextBlock' in replyCtxSkill) {
+      const replyBlock = (replyCtxSkill as any).getContextBlock(message);
+      if (replyBlock) contextBlocks.push(replyBlock);
+    }
+
+    // Pending questions context injection
+    const pendingQSkill = instance.skills.get('pending-questions');
+    if (pendingQSkill && 'getContextBlock' in pendingQSkill) {
+      const pendingBlock = (pendingQSkill as any).getContextBlock(message.chatId);
+      if (pendingBlock) contextBlocks.push(pendingBlock);
+    }
+
     // Get conversation history from conversation-history skill
     let conversationHistory: string | undefined;
     const historySkill = instance.skills.get('conversation-history');
     if (historySkill && 'formatHistory' in historySkill) {
-      conversationHistory = await (historySkill as any).formatHistory(message.chatId);
+      // Check conversation timeout
+      const timeout = config.behavior?.reception?.conversation_timeout_min;
+      if (timeout && timeout > 0 && 'getLastMessageTime' in historySkill) {
+        const lastTime = (historySkill as any).getLastMessageTime(message.chatId);
+        if (lastTime && (Date.now() - lastTime.getTime()) > timeout * 60 * 1000) {
+          log.info(`Conversation timeout: ${timeout}min idle, starting fresh for ${message.chatId}`);
+          // Skip history injection
+        } else {
+          conversationHistory = await (historySkill as any).formatHistory(message.chatId);
+        }
+      } else {
+        conversationHistory = await (historySkill as any).formatHistory(message.chatId);
+      }
     }
 
     let responseText: string;
@@ -188,12 +231,17 @@ function createBrainProcessor(
       responseText = "Sorry, I couldn't process that. Please try again.";
     }
 
-    // Send response
+    // Send response (via response-formatter if available)
     if (responseText) {
-      await instance.adapter.send({
-        chatId: message.chatId,
-        text: responseText,
-      });
+      const respFormatter = instance.skills.get('response-formatter');
+      if (respFormatter && 'formatAndSend' in respFormatter) {
+        await (respFormatter as any).formatAndSend(message.chatId, responseText);
+      } else {
+        await instance.adapter.send({
+          chatId: message.chatId,
+          text: responseText,
+        });
+      }
     }
 
     // Store conversation in history (if skill available)
@@ -202,6 +250,11 @@ function createBrainProcessor(
       if (responseText) {
         await (historySkill as any).addMessage(message.chatId, 'assistant', responseText);
       }
+    }
+
+    // Record pending questions from bot response
+    if (pendingQSkill && 'recordQuestion' in pendingQSkill && responseText) {
+      (pendingQSkill as any).recordQuestion(message.chatId, responseText);
     }
 
     // Record token usage (if skill available)
@@ -281,6 +334,23 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     toolRegistry,
   };
 
+  // 5a. Auto-detect bot identity
+  const reception = config.behavior?.reception;
+  instance.botUsername = reception?.bot_username || undefined;
+  instance.botId = undefined;
+  if (adapter.getBotInfo) {
+    try {
+      const info = await adapter.getBotInfo();
+      instance.botId = info.id;
+      if (!instance.botUsername && info.username) {
+        instance.botUsername = info.username;
+      }
+      log.info(`Bot identity: @${instance.botUsername} (ID: ${instance.botId})`);
+    } catch (err) {
+      log.warn(`Could not auto-detect bot identity: ${err}`);
+    }
+  }
+
   // 6. Determine message processor
   if (options.messageProcessor) {
     instance.processMessage = options.messageProcessor;
@@ -311,34 +381,136 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     }
   }
 
-  // 8. Wire up message handling
+  // 8. Wire up message handling (behavior-aware routing)
   adapter.onMessage(async (message) => {
     log.debug(`Message from ${message.userId}: ${message.text?.slice(0, 100) ?? '[non-text]'}`);
 
-    // Passive detection: in group chats, only respond to keyword matches or direct mentions
-    if (message.isGroup && config.passive_detection) {
-      const passiveSkill = skills.get('passive-detection');
-      if (passiveSkill && 'shouldProcess' in passiveSkill) {
-        const should = await (passiveSkill as any).shouldProcess(message);
-        if (!should) return;
+    const behavior = config.behavior;
+    const receptionCfg = behavior?.reception;
+    const msgTypes = behavior?.message_types;
+
+    // 8a. Message type filter
+    if (msgTypes) {
+      const typeKey = message.type as keyof typeof msgTypes;
+      if (typeKey in msgTypes && !msgTypes[typeKey]) {
+        log.debug(`Skipping disabled message type: ${message.type}`);
+        return;
       }
     }
 
-    if (instance.processMessage) {
-      try {
-        await instance.processMessage(message, instance);
-      } catch (err) {
-        log.error(`Error processing message: ${err}`);
-        // Try to send error message to user
+    // 8b. Reception rules
+    if (message.isGroup) {
+      const groupMode = receptionCfg?.group_mode ?? (config.passive_detection ? 'passive' : 'always');
+
+      if (groupMode === 'ignore') return;
+
+      if (groupMode === 'passive') {
+        let shouldProcess = false;
+
+        // Reply to THIS bot (not any bot)
+        if (receptionCfg?.respond_to_replies !== false
+            && message.replyToUserId
+            && instance.botId
+            && message.replyToUserId === instance.botId) {
+          shouldProcess = true;
+        }
+
+        // @mention with word boundary
+        if (!shouldProcess && receptionCfg?.respond_to_mentions !== false && instance.botUsername) {
+          const mentionRegex = new RegExp(`@${instance.botUsername}\\b`, 'i');
+          if (message.text && mentionRegex.test(message.text)) shouldProcess = true;
+        }
+
+        // Keyword/pattern matching (inline for new config, skill for legacy)
+        if (!shouldProcess && message.text) {
+          const keywords = receptionCfg?.keywords ?? config.passive_detection?.keywords ?? [];
+          const patterns = receptionCfg?.patterns ?? config.passive_detection?.patterns ?? [];
+          const caseSensitive = receptionCfg?.case_sensitive ?? config.passive_detection?.case_sensitive ?? false;
+          const compareText = caseSensitive ? message.text : message.text.toLowerCase();
+
+          for (const kw of keywords) {
+            if (compareText.includes(caseSensitive ? kw : kw.toLowerCase())) {
+              shouldProcess = true;
+              break;
+            }
+          }
+          if (!shouldProcess) {
+            for (const p of patterns) {
+              if (new RegExp(p, caseSensitive ? '' : 'i').test(message.text)) {
+                shouldProcess = true;
+                break;
+              }
+            }
+          }
+        }
+
+        // Legacy passive-detection skill fallback (for bots without behavior config)
+        if (!shouldProcess && !receptionCfg && config.passive_detection) {
+          const passiveSkill = skills.get('passive-detection');
+          if (passiveSkill && 'shouldProcess' in passiveSkill) {
+            shouldProcess = await (passiveSkill as any).shouldProcess(message);
+          }
+        }
+
+        if (!shouldProcess) return;
+      }
+      // groupMode === 'always' → fall through
+    } else {
+      // DM reception rules
+      const dmMode = receptionCfg?.dm_mode ?? 'always';
+      if (dmMode === 'ignore') return;
+      if (dmMode === 'keyword_only' && message.text) {
+        const keywords = receptionCfg?.keywords ?? [];
+        const caseSensitive = receptionCfg?.case_sensitive ?? false;
+        const compareText = caseSensitive ? message.text : message.text.toLowerCase();
+        let matched = false;
+        for (const kw of keywords) {
+          if (compareText.includes(caseSensitive ? kw : kw.toLowerCase())) { matched = true; break; }
+        }
+        if (!matched) return;
+      }
+    }
+
+    // 8c. Rate limiter
+    const rateLimit = config.behavior?.concurrency?.rate_limit_per_user;
+    if (rateLimit && rateLimit > 0) {
+      const window = config.behavior?.concurrency?.rate_limit_window_seconds ?? 60;
+      if (!shouldAllow(message.userId, rateLimit, window)) {
+        log.debug(`Rate limited user ${message.userId}`);
+        return;
+      }
+    }
+
+    // 8d. Typing indicator
+    const respFormatter = skills.get('response-formatter');
+    if (respFormatter && 'sendTyping' in respFormatter) {
+      await (respFormatter as any).sendTyping(message.chatId);
+    }
+
+    // 8e. Process message (with optional chat lock)
+    const chatLockEnabled = config.behavior?.concurrency?.chat_lock;
+    const processMsg = async () => {
+      if (instance.processMessage) {
         try {
-          await adapter.send({
-            chatId: message.chatId,
-            text: "Sorry, I couldn't process that. Please try again.",
-          });
-        } catch {
-          // Ignore send failure
+          await instance.processMessage(message, instance);
+        } catch (err) {
+          log.error(`Error processing message: ${err}`);
+          try {
+            await adapter.send({
+              chatId: message.chatId,
+              text: "Sorry, I couldn't process that. Please try again.",
+            });
+          } catch {
+            // Ignore send failure
+          }
         }
       }
+    };
+
+    if (chatLockEnabled) {
+      await withChatLock(message.chatId, processMsg);
+    } else {
+      await processMsg();
     }
   });
 
@@ -353,11 +525,34 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     }
   });
 
-  // 9. Start adapter
+  // 9. Log warnings for Phase D behavior groups (not yet enforced)
+  const phaseDGroups = ['access', 'guardrails', 'escalation', 'availability', 'onboarding', 'webhooks', 'i18n', 'fallback'] as const;
+  for (const group of phaseDGroups) {
+    if ((config.behavior as any)?.[group]) {
+      log.warn(`behavior.${group} is configured but not yet enforced by the runtime`);
+    }
+  }
+
+  // 10. Start adapter
   await adapter.start();
   log.info(`Bot "${config.name}" is running`);
 
-  // 10. Graceful shutdown
+  // 10a. Startup behavior — announce restart to recent chats
+  if (config.behavior?.startup?.announce_restart && config.behavior.startup.recovery_message) {
+    const histSkill = skills.get('conversation-history');
+    if (histSkill && 'getRecentChatIds' in histSkill) {
+      const recentChats = (histSkill as any).getRecentChatIds(24 * 60); // last 24h
+      for (const chatId of recentChats) {
+        try {
+          await adapter.send({ chatId, text: config.behavior.startup.recovery_message });
+        } catch (err) {
+          log.warn(`Failed to send restart message to ${chatId}: ${err}`);
+        }
+      }
+    }
+  }
+
+  // 11. Graceful shutdown
   const shutdown = async (signal: string) => {
     log.info(`Received ${signal}, shutting down...`);
     await adapter.stop();

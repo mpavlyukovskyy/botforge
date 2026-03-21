@@ -195,6 +195,15 @@ export class TelegramAdapter implements PlatformAdapter {
     return this.connected;
   }
 
+  async sendChatAction(chatId: string, action: string): Promise<void> {
+    await this.bot.sendChatAction(chatId, action as TelegramBot.ChatAction);
+  }
+
+  async getBotInfo(): Promise<{ id: string; username?: string }> {
+    const me = await this.bot.getMe();
+    return { id: String(me.id), username: me.username };
+  }
+
   /** Get the underlying bot instance (for platform-specific operations) */
   getRawBot(): TelegramBot {
     return this.bot;
@@ -259,6 +268,12 @@ export class TelegramAdapter implements PlatformAdapter {
       isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
       timestamp: new Date(msg.date * 1000),
       raw: msg,
+      replyToMessageId: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
+      replyToText: msg.reply_to_message?.text ?? msg.reply_to_message?.caption,
+      replyToUserId: msg.reply_to_message?.from ? String(msg.reply_to_message.from.id) : undefined,
+      replyToIsBot: msg.reply_to_message?.from?.is_bot,
+      isForwarded: !!msg.forward_date,
+      threadId: (msg as any).message_thread_id ? String((msg as any).message_thread_id) : undefined,
     };
   }
 

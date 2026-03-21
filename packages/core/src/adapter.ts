@@ -28,6 +28,15 @@ export interface IncomingMessage {
   isGroup?: boolean;
   /** Timestamp */
   timestamp: Date;
+  /** Reply context — message this is replying to */
+  replyToMessageId?: string;
+  replyToText?: string;
+  replyToUserId?: string;
+  replyToIsBot?: boolean;
+  /** Whether this message was forwarded */
+  isForwarded?: boolean;
+  /** Thread/topic ID (for supergroup topics) */
+  threadId?: string;
 }
 
 export interface OutgoingMessage {
@@ -81,6 +90,12 @@ export interface PlatformAdapter {
 
   /** Download a file by ID */
   downloadFile?(fileId: string): Promise<Buffer>;
+
+  /** Send a chat action (e.g. 'typing') — optional, gracefully degrades */
+  sendChatAction?(chatId: string, action: string): Promise<void>;
+
+  /** Get bot identity info (id + username) — optional, used for @mention detection */
+  getBotInfo?(): Promise<{ id: string; username?: string }>;
 
   /** Is the adapter currently connected? */
   isConnected(): boolean;

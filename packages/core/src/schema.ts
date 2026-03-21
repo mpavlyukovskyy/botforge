@@ -174,7 +174,146 @@ const CommunicationSchema = z.object({
   webhook_port: z.number().optional().describe('Port for receiving inter-bot webhooks'),
 });
 
-// ─── Passive Detection ───────────────────────────────────────────────────────
+// ─── Behavior ────────────────────────────────────────────────────────────────
+
+const ReceptionSchema = z.object({
+  dm_mode: z.enum(['always', 'ignore', 'keyword_only']).default('always'),
+  group_mode: z.enum(['passive', 'always', 'ignore']).default('passive'),
+  respond_to_replies: z.boolean().default(true),
+  respond_to_mentions: z.boolean().default(true),
+  bot_username: z.string().optional().describe('Auto-detected if empty'),
+  ignore_own_messages: z.boolean().default(true),
+  conversation_timeout_min: z.number().nonnegative().default(0),
+  keywords: z.array(z.string()).default([]),
+  patterns: z.array(z.string()).default([]),
+  case_sensitive: z.boolean().default(false),
+});
+
+const MessageTypesSchema = z.object({
+  text: z.boolean().default(true),
+  voice: z.boolean().default(false),
+  audio: z.boolean().default(false),
+  photo: z.boolean().default(false),
+  document: z.boolean().default(false),
+  video: z.boolean().default(false),
+  command: z.boolean().default(true),
+});
+
+const ResponseBehaviorSchema = z.object({
+  typing_indicator: z.boolean().default(true),
+  markdown: z.boolean().default(true),
+  markdown_fallback: z.boolean().default(true).describe('Retry as plain text on Markdown parse error'),
+  max_message_length: z.number().positive().default(4096).describe('Chunk at sentence boundaries'),
+  disable_link_preview: z.boolean().default(false),
+});
+
+const ConcurrencySchema = z.object({
+  chat_lock: z.boolean().default(false).describe('Per-chat mutex'),
+  rate_limit_per_user: z.number().nonnegative().default(0).describe('msg/min (0 = unlimited)'),
+  rate_limit_window_seconds: z.number().positive().default(60),
+});
+
+const ContinuitySchema = z.object({
+  pending_questions: z.boolean().default(false).describe('In-memory tracking, lost on restart'),
+  reply_context: z.boolean().default(false).describe('Inject replied-to message text into brain context'),
+  numbered_refs: z.boolean().default(false).describe('[1],[2] shorthand → entity ID mapping'),
+});
+
+const StartupSchema = z.object({
+  announce_restart: z.boolean().default(false),
+  recovery_message: z.string().default(''),
+});
+
+// ── Phase D schemas (validate in YAML, runtime warns "not enforced") ──
+
+const AccessSchema = z.object({
+  admin_users: z.array(z.string()).default([]),
+  blocked_users: z.array(z.string()).default([]),
+  restrict_to_allowlist: z.boolean().default(false),
+  allowed_users: z.array(z.string()).default([]),
+});
+
+const GuardrailsSchema = z.object({
+  max_response_length: z.number().positive().default(4000),
+  max_tool_calls_per_turn: z.number().positive().default(5),
+  blocked_topics: z.array(z.string()).default([]),
+  pii_patterns: z.array(z.string()).default([]),
+  pii_action: z.enum(['block', 'redact']).default('block'),
+  approval_required_tools: z.array(z.string()).default([]),
+});
+
+const EscalationSchema = z.object({
+  enabled: z.boolean().default(false),
+  trigger_phrases: z.array(z.string()).default([]),
+  auto_escalate_after_failures: z.number().nonnegative().default(3),
+  notify_channel: z.string().default(''),
+  escalation_message: z.string().default('Connecting you with a team member...'),
+  pause_bot_on_escalation: z.boolean().default(true),
+});
+
+const BusinessHoursSchema = z.object({
+  timezone: z.string().default('UTC'),
+  windows: z.array(z.string()).default([]),
+});
+
+const AvailabilitySchema = z.object({
+  business_hours: BusinessHoursSchema.optional(),
+  after_hours_action: z.enum(['auto_reply', 'normal']).default('normal'),
+  after_hours_message: z.string().default(''),
+});
+
+const OnboardingSchema = z.object({
+  welcome_message: z.string().default(''),
+  help_text: z.string().default(''),
+  suggested_actions: z.array(z.string()).default([]),
+  welcome_once: z.boolean().default(true),
+});
+
+const WebhooksSchema = z.object({
+  on_message_url: z.string().default(''),
+  on_error_url: z.string().default(''),
+  on_escalation_url: z.string().default(''),
+  include_message_content: z.boolean().default(false),
+  webhook_secret: z.string().default(''),
+  webhook_timeout_ms: z.number().positive().default(5000),
+});
+
+const I18nSchema = z.object({
+  default_language: z.string().default('en'),
+  supported_languages: z.array(z.string()).default(['en']),
+  prompt_overrides: z.record(z.string()).default({}),
+  unsupported_action: z.string().default('default'),
+  language_fallback_note: z.string().default(''),
+});
+
+const FallbackSchema = z.object({
+  error_message: z.string().default("I'm having trouble right now. Please try again."),
+  circuit_open_message: z.string().default("I'm temporarily unavailable."),
+  retry_on_error: z.boolean().default(true),
+  static_fallbacks: z.record(z.string()).default({}),
+  notify_admin_on_error: z.boolean().default(false),
+});
+
+const BehaviorSchema = z.object({
+  // Core (Phases A-C: full runtime enforcement)
+  reception: ReceptionSchema.optional(),
+  message_types: MessageTypesSchema.optional(),
+  response: ResponseBehaviorSchema.optional(),
+  concurrency: ConcurrencySchema.optional(),
+  continuity: ContinuitySchema.optional(),
+  startup: StartupSchema.optional(),
+  // Product (Phase D: schema validates, runtime warns "not enforced")
+  access: AccessSchema.optional(),
+  guardrails: GuardrailsSchema.optional(),
+  escalation: EscalationSchema.optional(),
+  availability: AvailabilitySchema.optional(),
+  onboarding: OnboardingSchema.optional(),
+  webhooks: WebhooksSchema.optional(),
+  i18n: I18nSchema.optional(),
+  fallback: FallbackSchema.optional(),
+});
+
+// ─── Passive Detection (deprecated — use behavior.reception) ─────────────────
 
 const PassiveDetectionSchema = z.object({
   keywords: z.array(z.string()).default([]),
@@ -231,6 +370,7 @@ export const BotConfigSchema = z.object({
   integrations: z.record(IntegrationSchema).optional(),
   health: HealthSchema.optional(),
   communication: CommunicationSchema.optional(),
+  behavior: BehaviorSchema.optional(),
   passive_detection: PassiveDetectionSchema.optional(),
   pipelines: z.array(PipelineSchema).optional(),
 
@@ -263,6 +403,13 @@ export type Integration = z.infer<typeof IntegrationSchema>;
 export type Health = z.infer<typeof HealthSchema>;
 export type Communication = z.infer<typeof CommunicationSchema>;
 export type Subscription = z.infer<typeof SubscriptionSchema>;
+export type Behavior = z.infer<typeof BehaviorSchema>;
+export type Reception = z.infer<typeof ReceptionSchema>;
+export type MessageTypes = z.infer<typeof MessageTypesSchema>;
+export type ResponseBehavior = z.infer<typeof ResponseBehaviorSchema>;
+export type Concurrency = z.infer<typeof ConcurrencySchema>;
+export type Continuity = z.infer<typeof ContinuitySchema>;
+export type Startup = z.infer<typeof StartupSchema>;
 export type PassiveDetection = z.infer<typeof PassiveDetectionSchema>;
 export type Pipeline = z.infer<typeof PipelineSchema>;
 export type PipelineStep = z.infer<typeof PipelineStepSchema>;

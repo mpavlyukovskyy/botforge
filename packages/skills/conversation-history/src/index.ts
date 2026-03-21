@@ -39,6 +39,14 @@ export class ConversationHistorySkill implements Skill {
     return this.store?.cleanup() ?? 0;
   }
 
+  getLastMessageTime(chatId: string): Date | null {
+    return this.store?.getLastMessageTime(chatId) ?? null;
+  }
+
+  getRecentChatIds(withinMinutes: number): string[] {
+    return this.store?.getRecentChatIds(withinMinutes) ?? [];
+  }
+
   async destroy(): Promise<void> {
     this.storage?.close();
   }

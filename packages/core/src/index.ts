@@ -1,5 +1,5 @@
 // Core exports
-export { loadConfig, validateConfig, type LoadConfigOptions } from './config.js';
+export { loadConfig, validateConfig, normalizeConfig, type LoadConfigOptions } from './config.js';
 export { startBot, type BotInstance, type BotForgeOptions, type AdapterFactory, type SkillFactory, type MessageProcessor } from './runtime.js';
 export { createLogger, type Skill, type SkillContext, type Logger, type DatabaseLike } from './skill.js';
 
@@ -9,6 +9,11 @@ export { askGemini, type GeminiBrainConfig, type GeminiInput, type GeminiRespons
 
 // Tool Registry
 export { ToolRegistry, loadToolsFromDir, type ToolImplementation, type ToolContext } from './tool-registry.js';
+
+// Utilities
+export { withChatLock } from './chat-lock.js';
+export { shouldAllow } from './rate-limiter.js';
+export { setRef, getRef, extractRefs, expandRefs, clearRefs } from './numbered-refs.js';
 
 // Adapter types
 export type {
@@ -40,6 +45,9 @@ export type {
   Health,
   Communication,
   Subscription,
+  Behavior,
+  Reception,
+  MessageTypes,
   PassiveDetection,
   Pipeline,
   PipelineStep,

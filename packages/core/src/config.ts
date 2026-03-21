@@ -62,6 +62,26 @@ function loadEnvFile(envPath: string): void {
   }
 }
 
+/**
+ * Normalize config: migrate deprecated `passive_detection` to `behavior.reception`.
+ * Merges old → new (only sets fields not already present in behavior.reception).
+ */
+export function normalizeConfig(raw: Record<string, any>): Record<string, any> {
+  if (raw.passive_detection) {
+    raw.behavior = raw.behavior || {};
+    raw.behavior.reception = raw.behavior.reception || {};
+    const r = raw.behavior.reception;
+    const pd = raw.passive_detection;
+    // Merge: only set fields not already present in behavior.reception
+    if (!r.keywords?.length && pd.keywords?.length) r.keywords = pd.keywords;
+    if (!r.patterns?.length && pd.patterns?.length) r.patterns = pd.patterns;
+    if (r.case_sensitive === undefined && pd.case_sensitive !== undefined) r.case_sensitive = pd.case_sensitive;
+    // Don't delete passive_detection yet — schema still allows it for backward compat
+    console.warn('[botforge] DEPRECATED: passive_detection moved to behavior.reception');
+  }
+  return raw;
+}
+
 export interface LoadConfigOptions {
   /** Override env vars for interpolation (useful for testing) */
   env?: Record<string, string>;
@@ -107,6 +127,9 @@ export function loadConfig(configPath: string, options: LoadConfigOptions = {}):
 
   // Interpolate env vars
   const interpolated = interpolateEnvVars(parsed) as Record<string, unknown>;
+
+  // Normalize deprecated config paths
+  normalizeConfig(interpolated as Record<string, any>);
 
   if (options.skipValidation) {
     return interpolated as unknown as BotConfig;

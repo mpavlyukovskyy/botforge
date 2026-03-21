@@ -7,12 +7,12 @@ export class PassiveDetectionSkill implements Skill {
   private caseSensitive = false;
 
   async init(ctx: SkillContext): Promise<void> {
-    const config = ctx.config.passive_detection;
+    const config = ctx.config.passive_detection ?? (ctx.config as any).behavior?.reception;
     if (!config) return;
 
     this.caseSensitive = config.case_sensitive;
     this.keywords = config.keywords;
-    this.patterns = config.patterns.map(p =>
+    this.patterns = config.patterns.map((p: string) =>
       new RegExp(p, this.caseSensitive ? '' : 'i')
     );
 

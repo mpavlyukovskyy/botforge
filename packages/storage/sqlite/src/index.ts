@@ -192,6 +192,24 @@ export class ConversationHistoryStore {
     return `<recent_conversation_history>\n${lines.join('\n')}\n</recent_conversation_history>`;
   }
 
+  /** Get the timestamp of the last message in a chat */
+  getLastMessageTime(chatId: string): Date | null {
+    const row = this.db.prepare(
+      'SELECT MAX(created_at) as last_time FROM conversation_history WHERE chat_id = ?'
+    ).get(chatId) as { last_time: string | null } | undefined;
+    return row?.last_time ? new Date(row.last_time) : null;
+  }
+
+  /** Get distinct chat IDs with messages within the given timeframe */
+  getRecentChatIds(withinMinutes: number): string[] {
+    const rows = this.db.prepare(
+      `SELECT DISTINCT chat_id FROM conversation_history
+       WHERE created_at > datetime('now', ?)
+       ORDER BY created_at DESC`
+    ).all(`-${withinMinutes} minutes`) as { chat_id: string }[];
+    return rows.map(r => r.chat_id);
+  }
+
   /** Delete messages older than TTL */
   cleanup(): number {
     const result = this.db.prepare(`
