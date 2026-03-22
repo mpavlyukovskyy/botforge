@@ -90,16 +90,23 @@ const createTask = {
     }
 
     // Store photo attachment if files present
-    if (ctx.files && ctx.files.length > 0 && atlasResult) {
+    if (ctx.files && ctx.files.length > 0) {
       try {
-        const { syncAttachment } = await import('../lib/atlas-client.js');
         const photoData = ctx.files[0].toString('base64');
-        await syncAttachment(ctx, atlasResult.atlasId, {
-          type: 'IMAGE',
-          data: photoData,
-          filename: 'photo.jpg',
-          mimeType: 'image/jpeg',
-        });
+        let synced = false;
+        if (atlasResult) {
+          const { syncAttachment } = await import('../lib/atlas-client.js');
+          synced = await syncAttachment(ctx, atlasResult.atlasId, {
+            type: 'IMAGE',
+            imageBase64: photoData,
+            filename: 'photo.jpg',
+            mimeType: 'image/jpeg',
+          });
+        }
+        // Persist locally for retry
+        db.prepare(
+          'INSERT INTO task_attachments (task_id, type, filename, mime_type, image_base64, synced_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(taskId, 'IMAGE', 'photo.jpg', 'image/jpeg', photoData, synced ? new Date().toISOString() : null);
       } catch (err) {
         ctx.log.warn(`Failed to sync photo attachment: ${err}`);
       }

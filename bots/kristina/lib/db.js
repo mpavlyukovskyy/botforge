@@ -54,6 +54,9 @@ export function runMigrations(ctx) {
     )
   `);
 
+  // Add image_base64 column for photo attachments (migration)
+  try { db.exec("ALTER TABLE task_attachments ADD COLUMN image_base64 TEXT"); } catch {}
+
   // registered_chats table
   db.exec(`
     CREATE TABLE IF NOT EXISTS registered_chats (
