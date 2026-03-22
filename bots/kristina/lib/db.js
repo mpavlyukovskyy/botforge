@@ -86,7 +86,7 @@ export function getRegisteredChat(ctx, chatId, userId) {
   const db = ensureDb(ctx.config);
   const row = db.prepare('SELECT * FROM registered_chats WHERE chat_id = ?').get(String(chatId));
   if (row) return row;
-  if (userId && userId !== chatId) {
+  if (userId && userId !== chatId && !String(chatId).startsWith('-')) {
     return db.prepare('SELECT * FROM registered_chats WHERE chat_id = ?').get(String(userId));
   }
   return null;
