@@ -3,7 +3,21 @@
  */
 
 import { getDb } from '../lib/db.js';
-import type { Position } from '../lib/types.js';
+
+/** Row shape returned by SQLite (snake_case columns) */
+interface PositionRow {
+  id: number;
+  strategy: string;
+  asset: string;
+  protocol: string;
+  side: string;
+  size: number;
+  entry_price: number;
+  current_price: number | null;
+  unrealized_pnl: number | null;
+  opened_at: string;
+  updated_at: string;
+}
 
 export default {
   command: 'positions',
@@ -13,7 +27,7 @@ export default {
 
     const positions = db.prepare(`
       SELECT * FROM positions ORDER BY strategy, protocol, asset
-    `).all() as Position[];
+    `).all() as PositionRow[];
 
     if (positions.length === 0) {
       await ctx.adapter.send({
@@ -23,7 +37,7 @@ export default {
       return;
     }
 
-    const grouped = new Map<string, Position[]>();
+    const grouped = new Map<string, PositionRow[]>();
     for (const p of positions) {
       const key = p.strategy;
       if (!grouped.has(key)) grouped.set(key, []);
@@ -37,14 +51,14 @@ export default {
       lines.push(`*${strategy}*`);
 
       for (const p of stratPositions) {
-        const pnlStr = p.unrealizedPnl != null
-          ? (p.unrealizedPnl >= 0 ? `+$${p.unrealizedPnl.toFixed(2)}` : `-$${Math.abs(p.unrealizedPnl).toFixed(2)}`)
+        const pnlStr = p.unrealized_pnl != null
+          ? (p.unrealized_pnl >= 0 ? `+$${p.unrealized_pnl.toFixed(2)}` : `-$${Math.abs(p.unrealized_pnl).toFixed(2)}`)
           : 'N/A';
-        const priceStr = p.currentPrice != null ? `$${p.currentPrice.toFixed(2)}` : 'N/A';
+        const priceStr = p.current_price != null ? `$${p.current_price.toFixed(2)}` : 'N/A';
 
         lines.push(
           `  ${p.side.toUpperCase()} ${p.size} ${p.asset} on ${p.protocol}`,
-          `    Entry: $${p.entryPrice.toFixed(2)} | Current: ${priceStr} | PnL: ${pnlStr}`,
+          `    Entry: $${p.entry_price.toFixed(2)} | Current: ${priceStr} | PnL: ${pnlStr}`,
         );
       }
     }
