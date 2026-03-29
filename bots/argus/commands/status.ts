@@ -12,11 +12,11 @@ export default {
     const db = getDb();
 
     const strategies = db.prepare(
-      'SELECT * FROM strategies ORDER BY allocation_pct DESC'
-    ).all() as Strategy[];
+      'SELECT id, status, allocation_pct, current_value, total_pnl FROM strategies ORDER BY allocation_pct DESC'
+    ).all() as Array<{ id: string; status: string; allocation_pct: number; current_value: number; total_pnl: number }>;
 
-    const totalValue = strategies.reduce((sum, s) => sum + s.currentValue, 0);
-    const totalPnl = strategies.reduce((sum, s) => sum + s.totalPnl, 0);
+    const totalValue = strategies.reduce((sum, s) => sum + (s.current_value ?? 0), 0);
+    const totalPnl = strategies.reduce((sum, s) => sum + (s.total_pnl ?? 0), 0);
 
     const lines = [
       '*Argus Portfolio Status*',
@@ -28,14 +28,17 @@ export default {
     ];
 
     for (const s of strategies) {
+      const value = s.current_value ?? 0;
+      const pnl = s.total_pnl ?? 0;
+      const alloc = s.allocation_pct ?? 0;
       const statusIcon = s.status === 'active' ? '🟢'
         : s.status === 'paused' ? '🟡'
         : s.status === 'halted' ? '🔴'
         : '⚪';
-      const pnlStr = s.totalPnl >= 0 ? `+$${s.totalPnl.toFixed(2)}` : `-$${Math.abs(s.totalPnl).toFixed(2)}`;
+      const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
       lines.push(
-        `${statusIcon} *${s.id}* (${(s.allocationPct * 100).toFixed(0)}%)`,
-        `   Value: $${s.currentValue.toFixed(2)} | P&L: ${pnlStr}`,
+        `${statusIcon} *${s.id}* (${(alloc * 100).toFixed(0)}%)`,
+        `   Value: $${value.toFixed(2)} | P&L: ${pnlStr}`,
       );
     }
 
