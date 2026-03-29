@@ -4,7 +4,7 @@
  * Idempotent — safe to re-run. Wraps all writes in a transaction.
  *
  * Allocation:
- *   funding-rate  40%  →  $40 USDC in wallet (ready capital)
+ *   funding-rate  40%  →  $40 ready capital (no positions — strategy creates arb legs on entry)
  *   yield         40%  →  $16 Aave USDC, $14 sUSDe, $10 USDY
  *   reserve       20%  →  $20 USDC in wallet
  *
@@ -64,8 +64,9 @@ function seed(): void {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `);
 
-    // funding-rate: $40 USDC ready capital in wallet
-    insertPos.run('funding-rate', 'USDC', 'wallet', 'long', 40, 1.0, 1.0, 0);
+    // funding-rate: NO positions — $40 is ready capital tracked via strategy current_value.
+    // The strategy's loadState() interprets a lone 'long' without matching 'short' as
+    // an orphaned arb leg and halts. Positions are only created when the strategy enters.
 
     // yield: $16 Aave USDC supply
     insertPos.run('yield', 'USDC', 'aave-v3', 'supply', 16, 1.0, 1.0, 0);
