@@ -1,0 +1,93 @@
+name: Argus
+version: "1.0"
+description: Multi-strategy automated trading system
+
+platform:
+  type: telegram
+  token: ${ARGUS_BOT_TOKEN}
+  chat_ids: ["381823289"]
+  mode: polling
+  local_bot_api: ${TELEGRAM_API_URL}
+
+brain:
+  provider: claude
+  model: claude-opus-4-6
+  system_prompt_file: prompts/reporter.md
+  tools:
+    - get_status
+    - get_positions
+    - get_funding
+    - get_yields
+    - pause_strategy
+    - resume_strategy
+    - emergency_close
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 7
+    max_messages: 50
+  context_blocks:
+    - type: portfolio_state
+      label: current_positions
+    - type: strategy_metrics
+      label: strategy_metrics
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 60000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  market_monitor:
+    cron: "* * * * *"
+    timezone: UTC
+  yield_monitor:
+    cron: "*/5 * * * *"
+    timezone: UTC
+  funding_rate_check:
+    cron: "*/5 * * * *"
+    timezone: UTC
+  yield_rebalance:
+    cron: "0 */4 * * *"
+    timezone: UTC
+  reconciliation:
+    cron: "*/30 * * * *"
+    timezone: UTC
+  stock_rebalance:
+    cron: "0 9 1 */3 *"
+    timezone: UTC
+  weekly_report:
+    cron: "0 1 * * 0"
+    timezone: UTC
+  daily_pnl:
+    cron: "0 0 * * *"
+    timezone: UTC
+  kill_switch_test:
+    cron: "0 3 * * 0"
+    timezone: UTC
+
+health:
+  port: 8089
+  path: /api/health
+
+behavior:
+  reception:
+    dm_mode: always
+    respond_to_replies: true
+    keywords: ["argus"]
+    case_sensitive: false
+  response:
+    typing_indicator: true
+    markdown: true
+    max_message_length: 4000
+  concurrency:
+    chat_lock: true
+
+env_file: ../.env

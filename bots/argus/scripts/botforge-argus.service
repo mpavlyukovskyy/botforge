@@ -1,0 +1,33 @@
+[Unit]
+Description=Argus Trading Bot (BotForge)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/argus
+ExecStart=/usr/bin/node packages/cli/dist/index.js dev bots/argus.yaml
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Environment
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--import tsx
+EnvironmentFile=/opt/argus/.env
+
+# Security hardening
+ReadWritePaths=/opt/argus/data /opt/argus/data/backups
+
+# Resource limits
+MemoryMax=512M
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus
+
+[Install]
+WantedBy=multi-user.target

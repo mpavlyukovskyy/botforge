@@ -18,6 +18,9 @@ import { YieldStrategy } from '../strategies/yield.js';
 import { createFundingRateDeps, createYieldDeps } from '../strategies/deps.js';
 import { setFundingRateStrategy, setHyperliquidAdapter as setFundingHL } from '../cron/funding-rate-check.js';
 import { setHyperliquidAdapter as setMarketHL } from '../cron/market-monitor.js';
+import { setYieldStrategy } from '../cron/yield-rebalance.js';
+import { setArbitrumAdapter as setYieldMonitorArb } from '../cron/yield-monitor.js';
+import { setHyperliquidAdapter as setReconHL, setArbitrumAdapter as setReconArb } from '../cron/reconciliation.js';
 
 export default {
   event: 'start',
@@ -62,15 +65,21 @@ export default {
 
       const yieldDeps = createYieldDeps(arbAdapter, sendFn);
       const yieldStrategy = new YieldStrategy(yieldDeps);
-      // TODO: Wire yield strategy to yield-rebalance cron
+      setYieldStrategy(yieldStrategy);
       ctx.log.info('Yield strategy initialized');
     } else {
       ctx.log.warn('Adapters not fully connected — strategies not initialized');
     }
 
-    // Register Hyperliquid adapter for market monitor
+    // Register adapters for cron jobs
     if (hlAdapter) {
       setMarketHL(hlAdapter);
+      setReconHL(hlAdapter);
+    }
+
+    if (arbAdapter) {
+      setYieldMonitorArb(arbAdapter);
+      setReconArb(arbAdapter);
     }
 
     // 4. Run startup reconciliation
