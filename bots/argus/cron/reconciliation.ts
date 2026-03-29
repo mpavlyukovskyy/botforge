@@ -31,16 +31,24 @@ export default {
       const result = await runReconciliation({
         getHyperliquidPositions: async () => {
           if (!hlAdapter?.isConnected()) return [];
-          const positions = await hlAdapter.getPositions();
-          return positions.map(p => ({
-            asset: p.asset,
-            size: p.size,
-            entryPrice: p.entryPrice,
-          }));
+          try {
+            const positions = await hlAdapter.getPositions();
+            return positions.map(p => ({
+              asset: p.asset,
+              size: p.size,
+              entryPrice: p.entryPrice,
+            }));
+          } catch {
+            return []; // Wallet not set in paper mode
+          }
         },
         getHyperliquidOpenOrders: async () => {
           if (!hlAdapter?.isConnected()) return [];
-          return hlAdapter.getOpenOrders();
+          try {
+            return hlAdapter.getOpenOrders();
+          } catch {
+            return []; // Wallet not set in paper mode
+          }
         },
         getArbitrumBalances: async () => {
           if (!arbAdapter?.isConnected()) return [];
