@@ -12,7 +12,7 @@ platform:
 brain:
   provider: claude
   model: claude-opus-4-6
-  system_prompt_file: prompts/reporter.md
+  system_prompt_file: argus/prompts/reporter.md
   tools:
     - get_status
     - get_positions
