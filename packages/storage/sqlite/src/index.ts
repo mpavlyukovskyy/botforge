@@ -155,6 +155,7 @@ export class ConversationHistoryStore {
 
   /** Add a message to conversation history */
   add(chatId: string, role: 'user' | 'assistant', content: string, metadata?: Record<string, unknown>): void {
+    if (!content?.trim()) return;
     let processedContent = content;
     if (this.stripActionLines && role === 'assistant') {
       processedContent = content
