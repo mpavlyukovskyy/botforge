@@ -93,20 +93,30 @@ export class YieldStrategy {
 
     try {
       // 1. sUSDe peg check (most time-sensitive)
-      const susdePrice = await this.deps.getSUSDePriceOnDex();
-      const depeg = Math.abs(1 - susdePrice);
+      let susdePrice: number;
+      try {
+        susdePrice = await this.deps.getSUSDePriceOnDex();
+      } catch {
+        susdePrice = -1; // Query failed (no wallet in paper mode)
+      }
 
-      if (depeg > SAFETY_LIMITS.SUSDE_DEPEG_THRESHOLD) {
-        console.error(
-          `[YieldStrategy] sUSDe DEPEG DETECTED: price=${susdePrice}, depeg=${(depeg * 100).toFixed(2)}%`,
-        );
-        await this.deps.sendAlert(
-          'emergency',
-          'sUSDe DEPEG DETECTED',
-          `sUSDe trading at ${susdePrice} — ${(depeg * 100).toFixed(2)}% off peg. Threshold: ${SAFETY_LIMITS.SUSDE_DEPEG_THRESHOLD * 100}%. Initiating emergency exit.`,
-        );
-        await this.emergencyExitSUSDE();
-        return;
+      // Only trigger depeg if we got a real price (> 0). A price of 0 or -1 means
+      // the query failed (e.g. no wallet configured), NOT an actual depeg.
+      if (susdePrice > 0) {
+        const depeg = Math.abs(1 - susdePrice);
+
+        if (depeg > SAFETY_LIMITS.SUSDE_DEPEG_THRESHOLD) {
+          console.error(
+            `[YieldStrategy] sUSDe DEPEG DETECTED: price=${susdePrice}, depeg=${(depeg * 100).toFixed(2)}%`,
+          );
+          await this.deps.sendAlert(
+            'emergency',
+            'sUSDe DEPEG DETECTED',
+            `sUSDe trading at ${susdePrice} — ${(depeg * 100).toFixed(2)}% off peg. Threshold: ${SAFETY_LIMITS.SUSDE_DEPEG_THRESHOLD * 100}%. Initiating emergency exit.`,
+          );
+          await this.emergencyExitSUSDE();
+          return;
+        }
       }
 
       // 2. Get latest APYs from yields table
@@ -434,16 +444,20 @@ export class YieldStrategy {
     // sUSDe depeg check
     try {
       const susdePrice = await this.deps.getSUSDePriceOnDex();
-      const depeg = Math.abs(1 - susdePrice);
 
-      if (depeg > SAFETY_LIMITS.SUSDE_DEPEG_THRESHOLD) {
-        await this.deps.sendAlert(
-          'emergency',
-          'sUSDe Depeg Circuit Breaker',
-          `sUSDe at ${susdePrice} — ${(depeg * 100).toFixed(2)}% off peg`,
-        );
-        await this.emergencyExitSUSDE();
-        return;
+      // Only act on real prices (> 0). A 0 means query failed (no wallet).
+      if (susdePrice > 0) {
+        const depeg = Math.abs(1 - susdePrice);
+
+        if (depeg > SAFETY_LIMITS.SUSDE_DEPEG_THRESHOLD) {
+          await this.deps.sendAlert(
+            'emergency',
+            'sUSDe Depeg Circuit Breaker',
+            `sUSDe at ${susdePrice} — ${(depeg * 100).toFixed(2)}% off peg`,
+          );
+          await this.emergencyExitSUSDE();
+          return;
+        }
       }
     } catch (err) {
       console.error(`[YieldStrategy] checkCircuitBreakers: sUSDe price check failed — ${err}`);
