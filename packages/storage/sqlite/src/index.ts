@@ -3,6 +3,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Logger } from '@botforge/core';
@@ -126,6 +127,30 @@ export const CONVERSATION_HISTORY_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_conv_hist_created_at ON conversation_history(created_at);
     `,
   },
+  {
+    version: 2,
+    name: 'add_sessions',
+    up: `
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        started_at TEXT DEFAULT (datetime('now')),
+        last_message_at TEXT DEFAULT (datetime('now')),
+        summary TEXT,
+        status TEXT DEFAULT 'active'
+      );
+      CREATE INDEX IF NOT EXISTS idx_sessions_chat_id ON sessions(chat_id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, chat_id);
+    `,
+  },
+  {
+    version: 3,
+    name: 'add_session_id_to_history',
+    up: `
+      ALTER TABLE conversation_history ADD COLUMN session_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_conv_hist_session_id ON conversation_history(session_id);
+    `,
+  },
 ];
 
 export interface ConversationMessage {
@@ -135,6 +160,7 @@ export interface ConversationMessage {
   content: string;
   created_at: string;
   metadata?: string;
+  session_id?: string;
 }
 
 export class ConversationHistoryStore {
@@ -142,15 +168,17 @@ export class ConversationHistoryStore {
   private maxMessages: number;
   private ttlDays: number;
   private stripActionLines: boolean;
+  private sessionTimeoutMinutes: number;
 
   constructor(
     storage: SqliteStorage,
-    options: { maxMessages?: number; ttlDays?: number; stripActionLines?: boolean } = {}
+    options: { maxMessages?: number; ttlDays?: number; stripActionLines?: boolean; sessionTimeoutMinutes?: number } = {}
   ) {
     this.db = storage.db;
     this.maxMessages = options.maxMessages ?? 100;
     this.ttlDays = options.ttlDays ?? 14;
     this.stripActionLines = options.stripActionLines ?? false;
+    this.sessionTimeoutMinutes = options.sessionTimeoutMinutes ?? 120;
   }
 
   /** Add a message to conversation history */
@@ -165,10 +193,15 @@ export class ConversationHistoryStore {
         .trim();
     }
 
+    // Get or create session
+    const { sessionId } = this.getOrCreateSession(chatId);
+
     this.db.prepare(`
-      INSERT INTO conversation_history (chat_id, role, content, metadata)
-      VALUES (?, ?, ?, ?)
-    `).run(chatId, role, processedContent, metadata ? JSON.stringify(metadata) : null);
+      INSERT INTO conversation_history (chat_id, role, content, metadata, session_id)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(chatId, role, processedContent, metadata ? JSON.stringify(metadata) : null, sessionId);
+
+    this.touchSession(sessionId);
   }
 
   /** Get recent conversation history for a chat */
@@ -183,14 +216,31 @@ export class ConversationHistoryStore {
 
   /** Format history as a context block for system prompt injection */
   formatAsContextBlock(chatId: string): string {
-    const messages = this.getRecent(chatId).reverse();
-    if (messages.length === 0) return '';
+    const { sessionId, previousSummary } = this.getOrCreateSession(chatId);
 
-    const lines = messages.map(m =>
-      `[${m.created_at}] ${m.role}: ${m.content}`
-    );
+    const messages = this.db.prepare(`
+      SELECT * FROM conversation_history
+      WHERE chat_id = ? AND session_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(chatId, sessionId, this.maxMessages) as ConversationMessage[];
 
-    return `<recent_conversation_history>\n${lines.join('\n')}\n</recent_conversation_history>`;
+    const reversed = messages.reverse();
+
+    const parts: string[] = [];
+
+    if (previousSummary) {
+      parts.push(`<previous_session>${previousSummary}</previous_session>`);
+    }
+
+    if (reversed.length > 0) {
+      const lines = reversed.map(m =>
+        `[${m.created_at}] ${m.role}: ${m.content}`
+      );
+      parts.push(`<recent_conversation_history>\n${lines.join('\n')}\n</recent_conversation_history>`);
+    }
+
+    return parts.join('\n');
   }
 
   /** Get the timestamp of the last message in a chat */
@@ -219,5 +269,81 @@ export class ConversationHistoryStore {
     `).run(`-${this.ttlDays} days`);
 
     return result.changes;
+  }
+
+  /** Get or create an active session for a chat */
+  getOrCreateSession(chatId: string): { sessionId: string; isNew: boolean; previousSummary?: string } {
+    const active = this.db.prepare(
+      `SELECT id, last_message_at FROM sessions
+       WHERE chat_id = ? AND status = 'active'
+       ORDER BY last_message_at DESC LIMIT 1`
+    ).get(chatId) as { id: string; last_message_at: string } | undefined;
+
+    if (active) {
+      const lastMsg = new Date(active.last_message_at + 'Z');
+      const elapsed = (Date.now() - lastMsg.getTime()) / (1000 * 60);
+
+      if (elapsed < this.sessionTimeoutMinutes) {
+        return { sessionId: active.id, isNew: false };
+      }
+
+      // Session timed out — close it and create new one
+      const summary = this.closeSession(active.id);
+      const newId = randomUUID();
+      this.db.prepare(
+        `INSERT INTO sessions (id, chat_id) VALUES (?, ?)`
+      ).run(newId, chatId);
+
+      return { sessionId: newId, isNew: true, previousSummary: summary ?? undefined };
+    }
+
+    // No active session — create one
+    const newId = randomUUID();
+    this.db.prepare(
+      `INSERT INTO sessions (id, chat_id) VALUES (?, ?)`
+    ).run(newId, chatId);
+
+    // Check for previous session summary
+    const lastClosed = this.db.prepare(
+      `SELECT summary FROM sessions
+       WHERE chat_id = ? AND status = 'closed' AND summary IS NOT NULL
+       ORDER BY last_message_at DESC LIMIT 1`
+    ).get(chatId) as { summary: string } | undefined;
+
+    return { sessionId: newId, isNew: true, previousSummary: lastClosed?.summary };
+  }
+
+  /** Close a session and generate its summary */
+  private closeSession(sessionId: string): string | null {
+    const messages = this.db.prepare(
+      `SELECT role, content FROM conversation_history
+       WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`
+    ).all(sessionId) as { role: string; content: string }[];
+
+    let summary: string | null = null;
+    if (messages.length > 0) {
+      const topics: string[] = [];
+      for (const msg of messages) {
+        if (msg.role === 'user' && msg.content.length > 10) {
+          topics.push(msg.content.slice(0, 100));
+        }
+      }
+      summary = topics.length > 0
+        ? `Previous conversation (${messages.length} messages): ${topics.slice(0, 3).join('; ')}`
+        : `Previous conversation: ${messages.length} messages`;
+    }
+
+    this.db.prepare(
+      `UPDATE sessions SET status = 'closed', summary = ? WHERE id = ?`
+    ).run(summary, sessionId);
+
+    return summary;
+  }
+
+  /** Update session last_message_at */
+  touchSession(sessionId: string): void {
+    this.db.prepare(
+      `UPDATE sessions SET last_message_at = datetime('now') WHERE id = ?`
+    ).run(sessionId);
   }
 }

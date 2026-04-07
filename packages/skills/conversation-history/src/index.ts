@@ -22,6 +22,7 @@ export class ConversationHistorySkill implements Skill {
       maxMessages: histConfig.max_messages,
       ttlDays: histConfig.ttl_days,
       stripActionLines: histConfig.strip_action_lines,
+      sessionTimeoutMinutes: (histConfig as any).session_timeout_minutes,
     });
 
     ctx.log.info(`Conversation history initialized (TTL: ${histConfig.ttl_days}d, max: ${histConfig.max_messages})`);

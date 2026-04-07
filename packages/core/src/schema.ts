@@ -73,6 +73,17 @@ const ClaudeBrainSchema = z.object({
   max_budget_usd: z.number().positive().optional().describe('Max cost per query in USD'),
 });
 
+const ClaudeCliBrainSchema = z.object({
+  provider: z.literal('claude-cli'),
+  model: z.string().default('claude-sonnet-4-6'),
+  system_prompt: z.string().optional(),
+  system_prompt_file: z.string().optional().describe('Path to system prompt file'),
+  tools: z.array(z.string()).default([]),
+  temperature: z.number().min(0).max(1).default(0),
+  max_tokens: z.number().positive().default(4096),
+  max_iterations: z.number().positive().optional().describe('Max tool-calling turns (default 5)'),
+});
+
 const GeminiBrainSchema = z.object({
   provider: z.literal('gemini'),
   model: z.string().default('gemini-2.0-flash'),
@@ -85,6 +96,7 @@ const GeminiBrainSchema = z.object({
 
 const BrainSchema = z.discriminatedUnion('provider', [
   ClaudeBrainSchema,
+  ClaudeCliBrainSchema,
   GeminiBrainSchema,
 ]);
 
@@ -122,6 +134,8 @@ const RetrySchema = z.object({
   base_delay_ms: z.number().positive().default(1000),
   max_delay_ms: z.number().positive().default(30000),
   transient_codes: z.array(z.number()).default([429, 502, 503, 504]),
+  /** HTTP codes that should immediately alert (no retry). Auth failures = operator action needed. */
+  alert_immediately_codes: z.array(z.number()).default([401, 403]),
 });
 
 const ResilienceSchema = z.object({
@@ -158,6 +172,14 @@ const HealthSchema = z.object({
   port: z.number(),
   path: z.string().default('/api/health'),
   management_api: z.boolean().default(true).describe('Enable /api/config, /api/logs, /api/restart'),
+});
+
+// ─── Tool Server ────────────────────────────────────────────────────────
+
+const ToolServerSchema = z.object({
+  enabled: z.boolean().default(true),
+  port: z.number(),
+  auth_token: z.string().optional().describe('Bearer token for auth, supports ${ENV_VAR} interpolation'),
 });
 
 // ─── Communication ───────────────────────────────────────────────────────────
@@ -313,14 +335,6 @@ const BehaviorSchema = z.object({
   fallback: FallbackSchema.optional(),
 });
 
-// ─── Passive Detection (deprecated — use behavior.reception) ─────────────────
-
-const PassiveDetectionSchema = z.object({
-  keywords: z.array(z.string()).default([]),
-  patterns: z.array(z.string()).default([]).describe('Regex patterns'),
-  case_sensitive: z.boolean().default(false),
-});
-
 // ─── Pipeline ────────────────────────────────────────────────────────────────
 
 const PipelineStepSchema = z.object({
@@ -369,9 +383,9 @@ export const BotConfigSchema = z.object({
   schedule: ScheduleSchema.optional(),
   integrations: z.record(IntegrationSchema).optional(),
   health: HealthSchema.optional(),
+  tool_server: ToolServerSchema.optional(),
   communication: CommunicationSchema.optional(),
   behavior: BehaviorSchema.optional(),
-  passive_detection: PassiveDetectionSchema.optional(),
   pipelines: z.array(PipelineSchema).optional(),
 
   tool_definitions: z.array(ToolDefinitionSchema).optional(),
@@ -390,6 +404,7 @@ export type WebPlatform = z.infer<typeof WebPlatformSchema>;
 export type HeadlessPlatform = z.infer<typeof HeadlessPlatformSchema>;
 export type Brain = z.infer<typeof BrainSchema>;
 export type ClaudeBrain = z.infer<typeof ClaudeBrainSchema>;
+export type ClaudeCliBrain = z.infer<typeof ClaudeCliBrainSchema>;
 export type GeminiBrain = z.infer<typeof GeminiBrainSchema>;
 export type Memory = z.infer<typeof MemorySchema>;
 export type ConversationHistory = z.infer<typeof ConversationHistorySchema>;
@@ -401,6 +416,7 @@ export type Schedule = z.infer<typeof ScheduleSchema>;
 export type CronJob = z.infer<typeof CronJobSchema>;
 export type Integration = z.infer<typeof IntegrationSchema>;
 export type Health = z.infer<typeof HealthSchema>;
+export type ToolServer = z.infer<typeof ToolServerSchema>;
 export type Communication = z.infer<typeof CommunicationSchema>;
 export type Subscription = z.infer<typeof SubscriptionSchema>;
 export type Behavior = z.infer<typeof BehaviorSchema>;
@@ -410,7 +426,6 @@ export type ResponseBehavior = z.infer<typeof ResponseBehaviorSchema>;
 export type Concurrency = z.infer<typeof ConcurrencySchema>;
 export type Continuity = z.infer<typeof ContinuitySchema>;
 export type Startup = z.infer<typeof StartupSchema>;
-export type PassiveDetection = z.infer<typeof PassiveDetectionSchema>;
 export type Pipeline = z.infer<typeof PipelineSchema>;
 export type PipelineStep = z.infer<typeof PipelineStepSchema>;
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;

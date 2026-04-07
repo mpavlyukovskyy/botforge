@@ -24,6 +24,8 @@ export interface SkillContext {
   db?: DatabaseLike;
   /** Reference to other loaded skills */
   skills: Map<string, Skill>;
+  /** Shared key-value store for cross-module state */
+  store?: Map<string, unknown>;
 }
 
 export interface Skill {

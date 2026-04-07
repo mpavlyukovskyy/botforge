@@ -1,14 +1,20 @@
 // Core exports
-export { loadConfig, validateConfig, normalizeConfig, type LoadConfigOptions } from './config.js';
-export { startBot, type BotInstance, type BotForgeOptions, type AdapterFactory, type SkillFactory, type MessageProcessor } from './runtime.js';
+export { loadConfig, validateConfig, type LoadConfigOptions } from './config.js';
+export { startBot, type BotInstance, type BotForgeOptions, type AdapterFactory, type SkillFactory, type MessageProcessor, type LifecycleHook, type ContextBuilder, type CronHandler } from './runtime.js';
 export { createLogger, type Skill, type SkillContext, type Logger, type DatabaseLike } from './skill.js';
 
 // Brain
 export { askBrain, type BrainTool, type BrainConfig, type BrainInput, type BrainResponse } from './brain.js';
+export { askBrainCli } from './brain-cli.js';
 export { askGemini, type GeminiBrainConfig, type GeminiInput, type GeminiResponse } from './brain-gemini.js';
 
 // Tool Registry
-export { ToolRegistry, loadToolsFromDir, type ToolImplementation, type ToolContext } from './tool-registry.js';
+export { ToolRegistry, loadToolsFromDir, type ToolImplementation, type ToolContext, type ToolPermissions } from './tool-registry.js';
+
+// Module System
+export { loadModulesFromDir } from './module-loader.js';
+export { CommandRegistry, parseCommand, type ModuleContext, type CommandHandler } from './command-registry.js';
+export { CallbackRegistry, type CallbackActionHandler, type CallbackContext } from './callback-registry.js';
 
 // Utilities
 export { withChatLock } from './chat-lock.js';
@@ -33,6 +39,7 @@ export type {
   TelegramPlatform,
   Brain,
   ClaudeBrain,
+  ClaudeCliBrain,
   GeminiBrain,
   Memory,
   ConversationHistory,
@@ -43,12 +50,12 @@ export type {
   Schedule,
   CronJob,
   Health,
+  ToolServer,
   Communication,
   Subscription,
   Behavior,
   Reception,
   MessageTypes,
-  PassiveDetection,
   Pipeline,
   PipelineStep,
   ToolDefinition,
