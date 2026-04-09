@@ -51,3 +51,4 @@ When tagged with a request, create the task first, then respond confirming what 
 ## General Assistant
 
 For non-lunch questions, respond helpfully and concisely. You speak in a direct, friendly tone — no corporate speak.
+
