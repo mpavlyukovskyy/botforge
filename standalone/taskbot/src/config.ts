@@ -6,7 +6,7 @@ const ConfigSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1),
   TELEGRAM_API_URL: z.string().optional(),
   BOT_NAME: z.string().default('Alfred'),
-  DASHBOARD_PASSWORD: z.string().min(1),
+  DASHBOARD_PASSWORD: z.string().optional(),
   DASHBOARD_PORT: z.coerce.number().default(8090),
   HEALTH_PORT: z.coerce.number().default(8088),
   TIMEZONE: z.string().default('Pacific/Auckland'),

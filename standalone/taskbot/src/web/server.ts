@@ -1,14 +1,6 @@
 import http from 'http';
 import { getConfig } from '../config.js';
 import {
-  isAuthenticated,
-  validatePassword,
-  createSession,
-  getSessionCookie,
-  getClearCookie,
-} from './auth.js';
-import {
-  loginPage,
   boardPage,
   taskDetailPage,
   createTaskPage,
@@ -51,46 +43,9 @@ export function startWebServer(port: number): void {
         return res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), ...stats }));
       }
 
-      // Auth routes
-      if (pathname === '/login' && method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(loginPage());
-      }
-
-      if (pathname === '/api/auth' && method === 'POST') {
-        const body = await readBody(req);
-        const contentType = req.headers['content-type'] || '';
-        let password: string;
-        if (contentType.includes('application/json')) {
-          password = JSON.parse(body).password || '';
-        } else {
-          password = parseFormBody(body).password || '';
-        }
-
-        if (validatePassword(password)) {
-          const token = createSession();
-          res.writeHead(302, {
-            'Set-Cookie': getSessionCookie(token),
-            Location: '/board',
-          });
-          return res.end();
-        }
-
-        res.writeHead(302, { Location: '/login?error=1' });
-        return res.end();
-      }
-
-      if (pathname === '/api/logout' && method === 'POST') {
-        res.writeHead(302, {
-          'Set-Cookie': getClearCookie(),
-          Location: '/login',
-        });
-        return res.end();
-      }
-
-      // All routes below require auth
-      if (!isAuthenticated(req)) {
-        res.writeHead(302, { Location: '/login' });
+      // Auth disabled — dashboard is public (read-only board view)
+      if (pathname === '/login') {
+        res.writeHead(302, { Location: '/board' });
         return res.end();
       }
 
