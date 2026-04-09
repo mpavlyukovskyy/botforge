@@ -1,0 +1,46 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm -r --if-present run typecheck
+      - run: pnpm -r --if-present run lint
+
+  scope-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Check PR scope
+        run: |
+          if [ "${{ github.event.pull_request.user.login }}" != "sli301" ]; then
+            echo "Not sli301, scope check not applicable"
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only origin/main...HEAD)
+          VIOLATIONS=""
+          while IFS= read -r file; do
+            case "$file" in
+              bots/alfred/*|bots/alfred.yaml) ;;
+              *) VIOLATIONS="$VIOLATIONS\n  $file" ;;
+            esac
+          done <<< "$CHANGED"
+          if [ -n "$VIOLATIONS" ]; then
+            echo "ERROR: Changes outside allowed scope (bots/alfred/):"
+            echo -e "$VIOLATIONS"
+            exit 1
+          fi

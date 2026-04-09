@@ -1,0 +1,63 @@
+name: Deploy Alfred
+on:
+  push:
+    branches: [main]
+    paths: ['bots/alfred/**', 'bots/alfred.yaml']
+  workflow_dispatch:
+concurrency:
+  group: deploy-alfred
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Build Alfred dist
+        run: node packages/cli/dist/index.js build alfred
+      - name: Deploy to /opt/botforge/alfred
+        run: |
+          # Backup current (hardlinks = instant, zero disk)
+          rm -rf /opt/botforge/alfred.bak
+          cp -al /opt/botforge/alfred /opt/botforge/alfred.bak 2>/dev/null || true
+
+          # Sync bot code, preserve runtime files
+          rsync -a --delete \
+            --exclude 'index.js' \
+            --exclude 'node_modules' \
+            --exclude '.env' \
+            --exclude 'data' \
+            dist/alfred/ /opt/botforge/alfred/
+
+          # Restart
+          systemctl restart botforge-alfred
+
+          # Health check
+          sleep 5
+          HEALTH=$(curl -sf http://localhost:8088/api/health || echo '{}')
+          echo "Health: $HEALTH"
+          if ! echo "$HEALTH" | grep -q '"status":"healthy"'; then
+            echo "FAILED — rolling back"
+            rsync -a --delete /opt/botforge/alfred.bak/ /opt/botforge/alfred/
+            systemctl restart botforge-alfred
+            exit 1
+          fi
+
+          rm -rf /opt/botforge/alfred.bak
+          echo "Alfred deployed successfully"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Alfred Deploy" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Deployed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "FAILED — auto-rolled back" >> $GITHUB_STEP_SUMMARY
+          fi
