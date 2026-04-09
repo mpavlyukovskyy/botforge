@@ -21,7 +21,12 @@
     "@botforge/skill-passive-detection": "workspace:*",
     "@botforge/skill-cron-scheduler": "workspace:*",
     "@botforge/skill-daily-digest": "workspace:*",
+    "@botforge/skill-event-bus": "workspace:*",
     "@botforge/skill-health-server": "workspace:*",
+    "@botforge/skill-pending-questions": "workspace:*",
+    "@botforge/skill-tool-server": "workspace:*",
+    "@botforge/skill-reply-context": "workspace:*",
+    "@botforge/skill-response-formatter": "workspace:*",
     "commander": "^13.0.0",
     "yaml": "^2.7.0"
   },

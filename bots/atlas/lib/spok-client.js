@@ -7,6 +7,7 @@
 
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 // ─── Database ───────────────────────────────────────────────────────────────
 
@@ -454,6 +455,44 @@ export async function retrySyncPending(ctx) {
   }
 
   return synced;
+}
+
+// ─── Sync Remote → Local DB ─────────────────────────────────────────────────
+
+export function syncItemsToLocal(ctx, items) {
+  if (!items || items.length === 0) return;
+  const db = ensureDb(ctx.config);
+
+  const upsert = db.prepare(`
+    INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, synced_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(spok_id) DO UPDATE SET
+      title = excluded.title,
+      column_name = excluded.column_name,
+      column_id = excluded.column_id,
+      assignee = excluded.assignee,
+      deadline = excluded.deadline,
+      status = excluded.status,
+      synced_at = excluded.synced_at,
+      updated_at = excluded.updated_at
+  `);
+
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      if (!item.id) continue;
+      upsert.run(
+        randomUUID(),
+        item.id,
+        item.title || '',
+        item.columnName || item.column?.name || '',
+        item.columnId || item.column?.id || null,
+        item.assignee || null,
+        item.deadline || null,
+        item.status || 'OPEN'
+      );
+    }
+  });
+  tx();
 }
 
 // ─── Local DB Helpers ───────────────────────────────────────────────────────

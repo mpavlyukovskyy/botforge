@@ -91,7 +91,7 @@ function matchRoute(url, method) {
   }
 
   const actionMatch = path.match(
-    /^\/api\/bots\/([^/]+)\/(start|stop|restart)$/,
+    /^\/api\/bots\/([^/]+)\/(start|stop|restart|deploy)$/,
   );
   if (actionMatch) {
     return { handler: actionMatch[2], name: actionMatch[1] };
@@ -159,6 +159,7 @@ function stripDefaults(obj) {
 
 // Managed child processes for bot lifecycle
 const managedProcesses = new Map();
+const deployingBots = new Set();
 
 async function handleApiRoute(req, res, io) {
   const route = matchRoute(req.url, req.method);
@@ -345,6 +346,66 @@ async function handleApiRoute(req, res, io) {
 
         io?.emit("bot:started", { name: route.name });
         return jsonResponse(res, { ok: true, pid: child.pid });
+      }
+
+      case "deploy": {
+        if (deployingBots.has(route.name)) {
+          return jsonResponse(res, { error: "Deploy already in progress" }, 409);
+        }
+
+        const fleet = loadFleetConfig();
+        const bot = fleet?.bots?.[route.name];
+        if (!bot?.service) {
+          return jsonResponse(
+            res,
+            { error: "Bot has no service configured for deploy" },
+            400,
+          );
+        }
+
+        deployingBots.add(route.name);
+        const deployId = crypto.randomUUID();
+        jsonResponse(res, { deployId, status: "started" });
+
+        const deployChild = spawn("node", [CLI_PATH, "deploy", route.name], {
+          cwd: resolve("../../"),
+          stdio: "pipe",
+          env: { ...process.env },
+        });
+
+        let deployOutput = "";
+        deployChild.stdout.on("data", (data) => {
+          const line = data.toString().trim();
+          deployOutput += line + "\n";
+          io?.emit("bot:deploy:progress", {
+            botName: route.name,
+            deployId,
+            line,
+          });
+        });
+
+        deployChild.stderr.on("data", (data) => {
+          const line = data.toString().trim();
+          deployOutput += line + "\n";
+          io?.emit("bot:deploy:progress", {
+            botName: route.name,
+            deployId,
+            line,
+            error: true,
+          });
+        });
+
+        deployChild.on("exit", (code) => {
+          deployingBots.delete(route.name);
+          io?.emit("bot:deploy:complete", {
+            botName: route.name,
+            deployId,
+            success: code === 0,
+            output: deployOutput,
+          });
+        });
+
+        return; // Response already sent
       }
 
       default:

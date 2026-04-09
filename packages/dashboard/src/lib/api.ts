@@ -67,6 +67,15 @@ export async function stopBot(name: string): Promise<void> {
   }
 }
 
+export async function deployBot(name: string): Promise<{ deployId: string }> {
+  const res = await fetch(`/api/bots/${name}/deploy`, { method: "POST" });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to start deploy");
+  }
+  return res.json();
+}
+
 export async function validateConfig(config: Record<string, any>): Promise<{ valid: boolean; errors?: string[] }> {
   const res = await fetch("/api/validate", {
     method: "POST",

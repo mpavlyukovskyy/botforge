@@ -12,7 +12,7 @@
 | 6 | **Ashley** (Email Monitor) | @Ashley1990bot | 8084 | Email classification | Gemini Flash | Mature |
 | 7 | **Alfred** (TaskBot) | Configurable | 8090 | Task mgmt + web dashboard | Opus | Newest |
 
-All deployed on OpenClaw via systemd. Source code at `/Users/Mark/Documents/dev/`.
+All deployed on OpenClaw via systemd. Source code at `/Users/Mark/Documents/dev/bots/`.
 
 ---
 

@@ -1,0 +1,128 @@
+name: ChiefOfStaff
+version: "1.0"
+description: Science Corp Chief of Staff — email triage, meeting prep, commitment tracking, and draft generation for Mark (VP Foundry)
+
+platform:
+  type: telegram
+  token: ${COS_TELEGRAM_BOT_TOKEN}
+  chat_ids: ["381823289"]
+  mode: polling
+
+brain:
+  provider: claude-cli
+  model: claude-sonnet-4-6
+  system_prompt_file: chief-of-staff/prompts/chief-of-staff.md
+  tools:
+    - search_emails
+    - get_email_thread
+    - list_calendar_events
+    - search_kb
+    - list_commitments
+    - update_commitment
+    - create_draft
+    - send_draft
+    - add_note
+    - list_queue
+    - get_queue_item
+    - dismiss_queue_item
+    - get_person_profile
+    - get_construction_status
+    - get_customer_status
+  temperature: 0
+  max_tokens: 4096
+  max_iterations: 8
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 14
+    max_messages: 50
+  context_blocks:
+    - type: active_commitments
+      label: active_commitments
+    - type: todays_calendar
+      label: todays_calendar
+    - type: recent_email_activity
+      label: recent_email_activity
+    - type: current_time
+      label: current_time
+    - type: recent_history
+      label: recent_conversation_history
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  email_check:
+    cron: "*/7 * * * *"
+    timezone: America/New_York
+  queue_maintenance:
+    cron: "*/15 * * * *"
+    timezone: America/New_York
+  draft_pregenerate:
+    cron: "3,18,33,48 8-22 * * 1-5"
+    timezone: America/New_York
+  profile_compile:
+    cron: "*/30 * * * *"
+    timezone: America/New_York
+  morning_briefing:
+    cron: "30 8 * * 1-5"
+    timezone: America/New_York
+  pre_meeting_check:
+    cron: "*/5 8-20 * * 1-5"
+    timezone: America/New_York
+  weekly_review:
+    cron: "0 17 * * 5"
+    timezone: America/New_York
+  commitment_check:
+    cron: "0 8 * * 1-5"
+    timezone: America/New_York
+  kb_compile:
+    cron: "15,45 * * * *"
+    timezone: UTC
+  construction_sync:
+    cron: "0 9 * * 1-5"
+    timezone: America/New_York
+  customer_sync:
+    cron: "5 9 * * 1-5"
+    timezone: America/New_York
+  operations_sync:
+    cron: "10 9 * * 1-5"
+    timezone: America/New_York
+  conversation_cleanup:
+    cron: "0 4 * * *"
+    timezone: America/New_York
+
+health:
+  port: 8091
+  path: /api/health
+
+behavior:
+  reception:
+    dm_mode: always
+    conversation_timeout_min: 120
+    group_mode: ignore
+    respond_to_replies: true
+    respond_to_mentions: true
+    keywords: []
+    case_sensitive: false
+  response:
+    typing_indicator: true
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 4000
+  concurrency:
+    chat_lock: true
+  continuity:
+    reply_context: true
+    pending_questions: true
+  access:
+    admin_users: ["${TELEGRAM_CHAT_ID}"]
+
+env_file: ../.env

@@ -235,6 +235,49 @@ export function BehaviorSection({ config, update }: Props) {
               />
             </FormField>
           </div>
+
+          {/* ── Access Control ── */}
+          <div className="border border-gray-800 rounded p-3 space-y-3">
+            <h4 className="text-sm font-medium text-gray-300">Access Control</h4>
+            <p className="text-xs text-gray-500">{SUBSECTION_HELP.access}</p>
+
+            <ArrayField
+              label="Admin Users"
+              values={behavior.access?.admin_users ?? []}
+              onChange={v => update("behavior.access.admin_users", v)}
+              placeholder="user ID"
+              help={BEHAVIOR_HELP["behavior.access.admin_users"]}
+              helpKey="behavior.access.admin_users"
+            />
+
+            <ArrayField
+              label="Blocked Users"
+              values={behavior.access?.blocked_users ?? []}
+              onChange={v => update("behavior.access.blocked_users", v)}
+              placeholder="user ID"
+              help={BEHAVIOR_HELP["behavior.access.blocked_users"]}
+              helpKey="behavior.access.blocked_users"
+            />
+
+            <CheckboxField
+              label="Restrict to allowlist"
+              checked={behavior.access?.restrict_to_allowlist ?? false}
+              onChange={v => update("behavior.access.restrict_to_allowlist", v)}
+              help={BEHAVIOR_HELP["behavior.access.restrict_to_allowlist"]}
+              helpKey="behavior.access.restrict_to_allowlist"
+            />
+
+            {behavior.access?.restrict_to_allowlist && (
+              <ArrayField
+                label="Allowed Users"
+                values={behavior.access?.allowed_users ?? []}
+                onChange={v => update("behavior.access.allowed_users", v)}
+                placeholder="user ID"
+                help={BEHAVIOR_HELP["behavior.access.allowed_users"]}
+                helpKey="behavior.access.allowed_users"
+              />
+            )}
+          </div>
         </div>
       )}
     </Section>

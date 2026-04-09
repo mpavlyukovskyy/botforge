@@ -41,4 +41,11 @@ health:
   port: 8084
   path: /api/health
 
+behavior:
+  response:
+    typing_indicator: false
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 4096
+
 env_file: ../.env

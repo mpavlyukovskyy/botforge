@@ -24,6 +24,8 @@ export interface IncomingMessage {
   };
   /** Callback data for inline keyboards */
   callbackData?: string;
+  /** Answer callback query with optional toast text (Telegram-specific) */
+  answerCallback?: (text?: string) => Promise<void>;
   /** Is this a group message? */
   isGroup?: boolean;
   /** Timestamp */
@@ -94,8 +96,14 @@ export interface PlatformAdapter {
   /** Send a chat action (e.g. 'typing') — optional, gracefully degrades */
   sendChatAction?(chatId: string, action: string): Promise<void>;
 
+  /** Set emoji reaction on a message — optional, gracefully degrades */
+  setMessageReaction?(chatId: string, messageId: string, emoji?: string): Promise<void>;
+
   /** Get bot identity info (id + username) — optional, used for @mention detection */
   getBotInfo?(): Promise<{ id: string; username?: string }>;
+
+  /** Called when bot is added to a new group (platform-specific) */
+  onGroupJoin?(handler: (chatId: string, title: string) => void): void;
 
   /** Is the adapter currently connected? */
   isConnected(): boolean;

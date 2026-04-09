@@ -4,7 +4,7 @@
  * Injects current Spok board state into LLM context.
  * No requester filtering — Atlas is a shared team bot.
  */
-import { getItems, getColumns } from '../lib/spok-client.js';
+import { getItems, getColumns, syncItemsToLocal } from '../lib/spok-client.js';
 
 export default {
   type: 'board_state',
@@ -12,6 +12,7 @@ export default {
     try {
       const columns = await getColumns(ctx);
       const items = await getItems(ctx, { status: 'OPEN' });
+      syncItemsToLocal(ctx, items);
 
       if (items.length === 0) return '<board_state>Board is empty.</board_state>';
 

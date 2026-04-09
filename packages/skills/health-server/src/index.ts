@@ -42,13 +42,25 @@ export class HealthServerSkill implements Skill {
         return;
       }
 
+      // Authenticate ALL management endpoints (not just /api/restart)
+      const expectedToken = process.env.HEALTH_API_TOKEN;
+      if (expectedToken) {
+        const authHeader = req.headers.authorization;
+        if (authHeader !== `Bearer ${expectedToken}`) {
+          res.writeHead(401);
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+      }
+
       // Config endpoint (secrets redacted)
       if (req.method === 'GET' && url.pathname === '/api/config') {
         const config = JSON.parse(JSON.stringify(ctx.config));
-        // Redact secrets
+        // Redact secrets by key name (not by value pattern — resolved env vars don't contain '${')
+        const SENSITIVE_KEYS = /token|password|key|secret|api_key|apikey|credential/i;
         const redact = (obj: any) => {
           for (const key in obj) {
-            if (typeof obj[key] === 'string' && obj[key].includes('${')) {
+            if (typeof obj[key] === 'string' && SENSITIVE_KEYS.test(key)) {
               obj[key] = '***';
             } else if (typeof obj[key] === 'object' && obj[key] !== null) {
               redact(obj[key]);
@@ -74,15 +86,8 @@ export class HealthServerSkill implements Skill {
         return;
       }
 
-      // Restart endpoint (requires auth)
+      // Restart endpoint
       if (req.method === 'POST' && url.pathname === '/api/restart') {
-        const authHeader = req.headers.authorization;
-        const expectedToken = process.env.HEALTH_API_TOKEN;
-        if (expectedToken && authHeader !== `Bearer ${expectedToken}`) {
-          res.writeHead(401);
-          res.end(JSON.stringify({ error: 'Unauthorized' }));
-          return;
-        }
         res.writeHead(200);
         res.end(JSON.stringify({ status: 'restarting' }));
         setTimeout(() => process.exit(0), 100);

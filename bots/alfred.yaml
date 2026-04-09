@@ -1,26 +1,26 @@
 name: Alfred
 version: "1.0"
-description: Task tracking bot with web dashboard and Google Calendar integration
+description: Personal assistant with weekly lunch recommendations from LunchDrop
 
 platform:
   type: telegram
-  token: ${TELEGRAM_BOT_TOKEN}
-  chat_ids: ["${TELEGRAM_CHAT_ID}"]
+  token: ${ALFRED_BOT_TOKEN}
+  chat_ids: ["${TELEGRAM_CHAT_ID}", "${LUNCH_GROUP_CHAT_ID}"]
   mode: polling
 
 brain:
   provider: claude
   model: claude-opus-4-6
-  system_prompt_file: prompts/alfred.md
+  system_prompt_file: alfred/prompts/alfred.md
   tools:
+    - get_menu
+    - get_recommendations
+    - refresh_menu
     - create_task
     - update_task
     - query_board
     - mark_done
     - delete_task
-    - get_calendar
-    - create_subtask
-    - attach_file
   temperature: 0
   max_tokens: 4096
 
@@ -30,6 +30,8 @@ memory:
     ttl_days: 14
     max_messages: 100
   context_blocks:
+    - type: lunch_state
+      label: lunch_this_week
     - type: board_state
       label: active_tasks
 
@@ -43,27 +45,45 @@ resilience:
     transient_codes: [429, 502, 503]
 
 schedule:
-  daily_digest:
-    cron: "30 8 * * *"
-    timezone: America/New_York
-  auto_archive:
-    cron: "0 8 * * *"
+  lunch_scrape:
+    cron: "0 18 * * 0"
     timezone: America/New_York
   conversation_cleanup:
     cron: "0 4 * * *"
     timezone: UTC
+  sync_retry:
+    cron: "*/5 * * * *"
+    timezone: UTC
+  auto_archive:
+    cron: "0 8 * * *"
+    timezone: America/New_York
 
 integrations:
-  google_calendar:
-    url: https://www.googleapis.com/calendar/v3
-    token: ${GOOGLE_CALENDAR_TOKEN}
+  atlas:
+    url: https://mp-atlas.fly.dev
+    sync_endpoint: /api/sync/alfred-bot/items
+    token: ${ATLAS_SYNC_KEY}
 
 health:
   port: 8088
   path: /api/health
 
-passive_detection:
-  keywords: ["alfred"]
-  case_sensitive: false
+behavior:
+  reception:
+    dm_mode: always
+    group_mode: passive
+    respond_to_replies: true
+    respond_to_mentions: true
+    keywords: ["alfred"]
+    case_sensitive: false
+  response:
+    typing_indicator: true
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 3000
+  concurrency:
+    chat_lock: true
+  continuity:
+    reply_context: true
 
 env_file: ../.env

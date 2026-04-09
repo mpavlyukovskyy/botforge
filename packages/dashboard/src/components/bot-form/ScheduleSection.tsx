@@ -1,6 +1,7 @@
 "use client";
 import { Section } from "@/components/Section";
 import { FormField, Input } from "@/components/FormField";
+import { SECTION_DESCRIPTIONS } from "@/lib/config-help";
 
 interface Props { config: Record<string, any>; update: (path: string, value: any) => void; }
 
@@ -31,6 +32,7 @@ export function ScheduleSection({ config, update }: Props) {
 
   return (
     <Section title="Schedule">
+      <p className="text-xs text-gray-500">{SECTION_DESCRIPTIONS.schedule}</p>
       {entries.map(([name, job]) => (
         <div key={name} className="flex gap-2 items-end">
           <FormField label="Name">

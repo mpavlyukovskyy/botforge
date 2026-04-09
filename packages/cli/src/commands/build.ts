@@ -3,6 +3,9 @@ import { resolve, dirname } from 'node:path';
 import { mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { loadFleetConfig } from '../fleet.js';
 
+/** Convention directories that may exist in a bot directory */
+const CONVENTION_DIRS = ['tools', 'commands', 'callbacks', 'cron', 'context', 'lifecycle', 'lib'];
+
 export function build(botName: string): void {
   const fleet = loadFleetConfig();
   const bot = fleet.bots[botName];
@@ -31,11 +34,17 @@ export function build(botName: string): void {
     execSync(`cp -r "${promptsDir}" "${distDir}/prompts"`, { stdio: 'inherit' });
   }
 
-  // 5. Copy tools directory if it exists
+  // 5. Copy all convention directories from bot directory
   const configName = bot.config.replace(/\.ya?ml$/, '').split('/').pop()!;
-  const toolsDir = resolve(configDir, configName, 'tools');
-  if (existsSync(toolsDir)) {
-    execSync(`cp -r "${toolsDir}" "${distDir}/tools"`, { stdio: 'inherit' });
+  const botDir = resolve(configDir, configName);
+  if (existsSync(botDir)) {
+    for (const dir of CONVENTION_DIRS) {
+      const srcDir = resolve(botDir, dir);
+      if (existsSync(srcDir)) {
+        execSync(`cp -r "${srcDir}" "${distDir}/${dir}"`, { stdio: 'inherit' });
+        console.log(`  Copied ${dir}/`);
+      }
+    }
   }
 
   console.log(`✓ Built ${botName} → dist/${botName}/`);

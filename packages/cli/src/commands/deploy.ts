@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { loadFleetConfig, type FleetBotConfig } from '../fleet.js';
+import { build } from './build.js';
 
 export async function deploy(botName: string): Promise<void> {
   const fleet = loadFleetConfig();
@@ -15,20 +16,10 @@ export async function deploy(botName: string): Promise<void> {
 
   console.log(`Deploying ${botName}...`);
 
-  // 1. Build
-  console.log('  Building...');
-  execSync(`pnpm -r build`, { stdio: 'inherit' });
+  // 1. Build (compiles packages, copies config, prompts, and convention dirs to dist/)
+  build(botName);
 
-  // 2. Bundle with tsup (creates dist/<botName>/)
-  console.log('  Bundling...');
-  execSync(`pnpm --filter @botforge/cli exec tsup src/index.ts --format esm --outDir ../../dist/${botName}`, {
-    stdio: 'inherit',
-    cwd: resolve('packages/cli'),
-  });
-
-  // 3. Copy config + dependencies
   const distDir = resolve(`dist/${botName}`);
-  execSync(`cp ${resolve(bot.config)} ${distDir}/config.yaml`);
 
   // 4. Upload to server
   console.log('  Uploading...');

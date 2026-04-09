@@ -1,0 +1,95 @@
+name: Trainer
+version: "1.0"
+description: AI personal trainer — periodized programs, recovery-aware workouts via Whoop + Eight Sleep, pushes to Hevy
+
+platform:
+  type: telegram
+  token: ${TRAINER_BOT_TOKEN}
+  chat_ids: ["${TRAINER_CHAT_ID}"]
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-sonnet-4-6
+  system_prompt_file: trainer/prompts/trainer.md
+  tools:
+    - get_recovery_data
+    - get_recent_workouts
+    - get_exercise_history
+    - search_exercises
+    - get_current_program
+    - create_program
+    - get_goals
+    - set_goals
+    - push_workout_to_hevy
+    - adjust_workout
+    - skip_workout
+    - generate_timed_workout
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 14
+    max_messages: 100
+  context_blocks:
+    - type: training_state
+      label: training_state
+    - type: recovery_state
+      label: recovery_state
+    - type: goal_summary
+      label: goal_summary
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  daily_sync:
+    cron: "0 5 * * *"
+    timezone: America/New_York
+  morning_workout:
+    cron: "0 7 * * *"
+    timezone: America/New_York
+  token_refresh:
+    cron: "*/5 * * * *"
+    timezone: UTC
+  weekly_review:
+    cron: "0 20 * * 0"
+    timezone: America/New_York
+  monthly_check_in:
+    cron: "0 9 1 * *"
+    timezone: America/New_York
+  conversation_cleanup:
+    cron: "0 4 * * *"
+    timezone: UTC
+
+health:
+  port: 8092
+  path: /api/health
+
+behavior:
+  reception:
+    dm_mode: always
+    group_mode: ignore
+    respond_to_replies: true
+    respond_to_mentions: true
+    keywords: ["trainer"]
+    case_sensitive: false
+  response:
+    typing_indicator: true
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 4000
+  concurrency:
+    chat_lock: true
+  continuity:
+    reply_context: true
+
+env_file: ../.env

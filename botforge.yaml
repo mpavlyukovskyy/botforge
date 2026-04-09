@@ -33,6 +33,14 @@ bots:
     config: bots/alfred.yaml
     service: botforge-alfred
     port: 8088
+  chief-of-staff:
+    config: bots/chief-of-staff.yaml
+    service: botforge-chief-of-staff
+    port: 8091
+  trainer:
+    config: bots/trainer.yaml
+    service: botforge-trainer
+    port: 8092
   test-echo:
     config: bots/test-echo.yaml
     port: 9001

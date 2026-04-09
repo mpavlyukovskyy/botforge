@@ -5,8 +5,9 @@ description: Mark's personal task assistant, syncs to Atlas task board
 platform:
   type: telegram
   token: ${TELEGRAM_BOT_TOKEN}
-  chat_ids: ["${TELEGRAM_CHAT_ID}"]
+  chat_ids: []
   mode: polling
+  local_bot_api: ${TELEGRAM_API_URL}
 
 brain:
   provider: claude
@@ -29,6 +30,8 @@ memory:
   context_blocks:
     - type: board_state
       label: active_tasks
+    - type: current_time
+      label: current_time
     - type: recent_history
       label: recent_conversation_history
 
@@ -54,6 +57,9 @@ schedule:
   sync_retry:
     cron: "*/5 * * * *"
     timezone: UTC
+  done_notification:
+    cron: "*/10 * * * *"
+    timezone: UTC
 
 integrations:
   atlas:
@@ -65,8 +71,24 @@ health:
   port: 8087
   path: /api/health
 
-passive_detection:
-  keywords: ["kristina"]
-  case_sensitive: false
+behavior:
+  reception:
+    dm_mode: always
+    group_mode: passive
+    respond_to_replies: true
+    respond_to_mentions: true
+    keywords: ["kristina"]
+    case_sensitive: false
+  response:
+    typing_indicator: true
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 3000
+  concurrency:
+    chat_lock: true
+  continuity:
+    reply_context: true
+  access:
+    admin_users: ["${TELEGRAM_CHAT_ID}"]
 
 env_file: ../.env

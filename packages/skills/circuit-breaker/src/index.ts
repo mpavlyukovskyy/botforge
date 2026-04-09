@@ -22,10 +22,20 @@ export class CircuitBreakerSkill implements Skill {
     this.resetTimeoutMs = cbConfig.reset_timeout_ms;
     this.halfOpenMax = cbConfig.half_open_max;
 
-    // Alert callback sends notification via adapter
+    // Alert callback sends notification via adapter AND logs
     this.onAlert = (state, error) => {
       const msg = `⚠️ Circuit breaker ${state}${error ? `: ${error}` : ''}`;
       ctx.log.warn(msg);
+      // Send to Telegram so operators are notified immediately
+      if (ctx.adapter) {
+        const platform = ctx.config.platform;
+        const chatIds = platform.type === 'telegram' ? (platform.chat_ids ?? []) : [];
+        for (const chatId of chatIds) {
+          ctx.adapter.send({ chatId, text: msg }).catch((err: unknown) => {
+            ctx.log.error(`Failed to send circuit breaker alert to ${chatId}: ${err}`);
+          });
+        }
+      }
     };
 
     ctx.log.info(`Circuit breaker initialized (threshold: ${this.threshold}, reset: ${this.resetTimeoutMs}ms)`);

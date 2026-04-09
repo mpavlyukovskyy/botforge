@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Agent management platform \u2014 run, monitor, and manage AI agents at scale",
+  "description": "Agent management platform — run, monitor, and manage AI agents at scale",
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --filter @botforge/cli dev",
     "test": "pnpm -r test",
+    "test:argus": "vitest run",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
   },
@@ -28,5 +29,22 @@
       "better-sqlite3",
       "esbuild"
     ]
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
+    "@nktkas/hyperliquid": "0.32.1",
+    "better-sqlite3": "^11.10.0",
+    "ethers": "6.13.5",
+    "fuse.js": "^7.3.0",
+    "googleapis": "^146.0.0",
+    "imapflow": "^1.2.18",
+    "playwright": "^1.59.1",
+    "viem": "2.23.2",
+    "ws": "^8.20.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.0"
   }
 }

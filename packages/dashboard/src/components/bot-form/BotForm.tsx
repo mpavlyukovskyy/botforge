@@ -8,7 +8,6 @@ import { ResilienceSection } from "./ResilienceSection";
 import { ScheduleSection } from "./ScheduleSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { HealthSection } from "./HealthSection";
-import { PassiveDetectionSection } from "./PassiveDetectionSection";
 import { BehaviorSection } from "./BehaviorSection";
 import { validateConfig } from "@/lib/api";
 
@@ -86,7 +85,6 @@ export function BotForm({ initialConfig, isNew, onSave }: BotFormProps) {
       <IntegrationsSection config={config} update={update} />
       <HealthSection config={config} update={update} />
       <BehaviorSection config={config} update={update} />
-      <PassiveDetectionSection config={config} update={update} />
 
       <div className="flex gap-3 pt-4">
         <button

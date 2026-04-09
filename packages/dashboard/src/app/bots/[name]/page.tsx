@@ -1,10 +1,11 @@
 "use client";
-import { use, useState } from "react";
+import { use, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { BotForm } from "@/components/bot-form/BotForm";
 import { useBotConfig } from "@/hooks/useBotConfig";
 import { useBotLifecycle } from "@/hooks/useBotLifecycle";
+import { useBotDeploy } from "@/hooks/useBotDeploy";
 import { useFleetStatus } from "@/hooks/useFleetStatus";
 import { deleteBot } from "@/lib/api";
 
@@ -45,12 +46,17 @@ export default function EditBotPage({ params }: { params: Promise<{ name: string
   const router = useRouter();
   const { data, loading, save, error } = useBotConfig(name);
   const lifecycle = useBotLifecycle();
+  const deployer = useBotDeploy();
   const statuses = useFleetStatus();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   const botStatus = statuses.find(s => s.name === name);
   const status: string = botStatus?.status ?? "unknown";
   const isOnline = status === "healthy" || status === "online";
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [deployer.logs]);
 
   if (loading) return <p className="text-gray-400">Loading...</p>;
   if (error) return <p className="text-red-400">Error: {error}</p>;
@@ -95,6 +101,13 @@ export default function EditBotPage({ params }: { params: Promise<{ name: string
               {lifecycle.loading === name ? "Starting..." : "Start"}
             </button>
           )}
+          <button
+            onClick={() => deployer.deploy(name)}
+            disabled={deployer.status === "deploying"}
+            className="px-3 py-1.5 text-sm bg-blue-900/50 hover:bg-blue-900 text-blue-300 rounded disabled:opacity-50"
+          >
+            {deployer.status === "deploying" ? "Deploying..." : "Deploy"}
+          </button>
           {!confirmDelete ? (
             <button onClick={() => setConfirmDelete(true)} className="px-3 py-1.5 text-sm bg-red-900/50 hover:bg-red-900 text-red-300 rounded">
               Delete
@@ -131,6 +144,55 @@ export default function EditBotPage({ params }: { params: Promise<{ name: string
             <span className="text-gray-500 block">Heap Used</span>
             <span className="text-gray-200 font-mono">{formatBytes(botStatus.memory?.heapUsed)}</span>
           </div>
+        </div>
+      )}
+
+      {/* Deploy progress panel */}
+      {deployer.status !== "idle" && (
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              {deployer.status === "deploying" && (
+                <>
+                  <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                  <span className="text-blue-300">Deploying...</span>
+                </>
+              )}
+              {deployer.status === "success" && (
+                <>
+                  <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-green-300">Deploy succeeded</span>
+                </>
+              )}
+              {deployer.status === "failed" && (
+                <>
+                  <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
+                  <span className="text-red-300">Deploy failed</span>
+                </>
+              )}
+            </div>
+            {deployer.status !== "deploying" && (
+              <button
+                onClick={deployer.dismiss}
+                className="text-xs text-gray-500 hover:text-gray-300"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+          {deployer.logs.length > 0 && (
+            <div className="bg-black/50 rounded p-2 max-h-48 overflow-y-auto font-mono text-xs">
+              {deployer.logs.map((log, i) => (
+                <div key={i} className={log.error ? "text-red-400" : "text-gray-400"}>
+                  {log.line}
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          )}
+          {deployer.error && (
+            <p className="text-red-400 text-xs mt-2">{deployer.error}</p>
+          )}
         </div>
       )}
 

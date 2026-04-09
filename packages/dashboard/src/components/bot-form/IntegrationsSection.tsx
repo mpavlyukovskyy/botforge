@@ -1,6 +1,7 @@
 "use client";
 import { Section } from "@/components/Section";
 import { FormField, Input } from "@/components/FormField";
+import { SECTION_DESCRIPTIONS } from "@/lib/config-help";
 
 interface Props { config: Record<string, any>; update: (path: string, value: any) => void; }
 
@@ -20,6 +21,7 @@ export function IntegrationsSection({ config, update }: Props) {
 
   return (
     <Section title="Integrations">
+      <p className="text-xs text-gray-500">{SECTION_DESCRIPTIONS.integrations}</p>
       {entries.map(([name, int]) => (
         <div key={name} className="border border-gray-800 rounded p-3 space-y-2">
           <div className="flex items-center justify-between">

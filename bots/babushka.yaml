@@ -61,4 +61,18 @@ health:
   port: 8085
   path: /api/health
 
+behavior:
+  reception:
+    dm_mode: always
+    group_mode: ignore
+    respond_to_replies: true
+    respond_to_mentions: true
+  response:
+    typing_indicator: true
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 4096
+  concurrency:
+    chat_lock: true
+
 env_file: ../.env

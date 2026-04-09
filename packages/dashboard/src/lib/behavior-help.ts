@@ -115,6 +115,26 @@ export const BEHAVIOR_HELP: Record<string, HelpEntry> = {
     detail: "Only sent when \"Announce restart\" is enabled. Leave blank to use a generic default.",
     example: "\"I'm back online! What were we discussing?\"",
   },
+
+  // ── Access Control ──
+  "behavior.access.admin_users": {
+    summary: "User IDs with full access.",
+    detail: "Admins bypass allowlist restrictions and rate limits. Use Telegram user IDs (numeric strings).",
+    example: "\"381823289\"",
+  },
+  "behavior.access.blocked_users": {
+    summary: "User IDs to silently ignore.",
+    detail: "Messages from blocked users are dropped with no response. The user sees no indication they are blocked.",
+  },
+  "behavior.access.restrict_to_allowlist": {
+    summary: "Only allow messages from listed users.",
+    detail: "When enabled, only admin_users and allowed_users can interact with the bot. All others are silently ignored.",
+    defaultValue: "false",
+  },
+  "behavior.access.allowed_users": {
+    summary: "User IDs permitted when allowlist mode is active.",
+    detail: "Only shown when \"Restrict to allowlist\" is enabled. Admin users are always allowed regardless.",
+  },
 };
 
 export const SUBSECTION_HELP: Record<string, string> = {
@@ -124,4 +144,5 @@ export const SUBSECTION_HELP: Record<string, string> = {
   concurrency: "Handle multiple messages arriving at once.",
   continuity: "Help the bot maintain context across a conversation.",
   startup: "What happens when the bot restarts.",
+  access: "Control who can interact with your bot.",
 };

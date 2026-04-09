@@ -55,8 +55,30 @@ health:
   port: 9003
   path: /api/health
 
-passive_detection:
-  keywords: ["test", "bot"]
-  case_sensitive: false
+behavior:
+  reception:
+    dm_mode: always
+    group_mode: passive
+    respond_to_replies: true
+    respond_to_mentions: true
+    keywords: ["test", "bot"]
+    case_sensitive: false
+  response:
+    typing_indicator: true
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 4096
+    disable_link_preview: false
+  concurrency:
+    chat_lock: false
+    rate_limit_per_user: 5
+    rate_limit_window_seconds: 60
+  continuity:
+    reply_context: true
+    pending_questions: true
+    numbered_refs: true
+  startup:
+    announce_restart: true
+    recovery_message: "Test bot restarted. What were we working on?"
 
 env_file: ../.env

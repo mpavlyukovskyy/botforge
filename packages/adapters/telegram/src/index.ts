@@ -3,6 +3,7 @@
  */
 
 import TelegramBot from 'node-telegram-bot-api';
+import { readFileSync } from 'fs';
 import type {
   PlatformAdapter,
   IncomingMessage,
@@ -17,11 +18,13 @@ import type {
 export class TelegramAdapter implements PlatformAdapter {
   readonly platform = 'telegram';
   private bot: TelegramBot;
-  private messageHandlers: MessageHandler[] = [];
-  private callbackHandlers: CallbackHandler[] = [];
+  private messageHandler?: MessageHandler;
+  private callbackHandler?: CallbackHandler;
   private connected = false;
   private config: TelegramPlatform;
   private log: Logger;
+  private dynamicChatIds = new Set<string>();
+  private groupJoinHandler?: (chatId: string, title: string) => void;
 
   constructor(botConfig: BotConfig, log: Logger) {
     const platform = botConfig.platform;
@@ -45,42 +48,93 @@ export class TelegramAdapter implements PlatformAdapter {
 
   async start(): Promise<void> {
     // Wire up message listener
-    this.bot.on('message', (msg) => {
+    this.bot.on('message', async (msg) => {
       const incoming = this.convertMessage(msg);
       if (!incoming) return;
 
       // Filter by allowed chat IDs
       if (this.config.chat_ids?.length) {
-        if (!this.config.chat_ids.includes(String(msg.chat.id))) {
+        const chatStr = String(msg.chat.id);
+        if (!this.config.chat_ids.includes(chatStr) && !this.dynamicChatIds.has(chatStr)) {
           this.log.debug(`Ignoring message from unauthorized chat ${msg.chat.id}`);
           return;
         }
       }
 
-      for (const handler of this.messageHandlers) {
-        handler(incoming).catch(err => {
+      if (this.messageHandler) {
+        try {
+          await this.messageHandler(incoming);
+        } catch (err) {
           this.log.error(`Message handler error: ${err}`);
-        });
+        }
       }
     });
 
     // Wire up callback query listener
-    this.bot.on('callback_query', (query) => {
+    this.bot.on('callback_query', async (query) => {
       const incoming = this.convertCallback(query);
       if (!incoming) return;
 
-      // Auto-answer callback to remove loading state
-      this.bot.answerCallbackQuery(query.id).catch(() => {});
+      // Filter by allowed chat IDs (same whitelist as messages)
+      if (this.config.chat_ids?.length) {
+        const chatStr = incoming.chatId;
+        if (!this.config.chat_ids.includes(chatStr) && !this.dynamicChatIds.has(chatStr)) {
+          this.log.debug(`Ignoring callback from unauthorized chat ${chatStr}`);
+          this.bot.answerCallbackQuery(query.id).catch(() => {});
+          return;
+        }
+      }
 
-      for (const handler of this.callbackHandlers) {
-        handler(incoming).catch(err => {
+      // Track whether callback has been answered
+      let answered = false;
+      incoming.answerCallback = async (text?: string) => {
+        if (answered) return;
+        answered = true;
+        await this.bot.answerCallbackQuery(query.id, { text }).catch(() => {});
+      };
+
+      // Fallback: auto-answer after 5s if handler hasn't answered
+      const fallbackTimer = setTimeout(() => {
+        if (!answered) {
+          answered = true;
+          this.bot.answerCallbackQuery(query.id).catch(() => {});
+        }
+      }, 5000);
+
+      if (this.callbackHandler) {
+        try {
+          await this.callbackHandler(incoming);
+        } catch (err) {
           this.log.error(`Callback handler error: ${err}`);
-        });
+        }
+      }
+
+      clearTimeout(fallbackTimer);
+      // If handler finished without answering, answer now
+      if (!answered) {
+        answered = true;
+        this.bot.answerCallbackQuery(query.id).catch(() => {});
       }
     });
 
     this.bot.on('polling_error', (err) => {
       this.log.error(`Polling error: ${err.message}`);
+    });
+
+    // Auto-detect group joins/removals
+    this.bot.on('my_chat_member', async (update: any) => {
+      const chat = update.chat;
+      const newStatus = update.new_chat_member?.status;
+      if (newStatus === 'member' || newStatus === 'administrator') {
+        this.log.info(`Bot added to ${chat.type} "${chat.title}" (ID: ${chat.id})`);
+        this.dynamicChatIds.add(String(chat.id));
+        if (this.groupJoinHandler) {
+          this.groupJoinHandler(String(chat.id), chat.title || 'Unknown');
+        }
+      } else if (newStatus === 'left' || newStatus === 'kicked') {
+        this.log.info(`Bot removed from "${chat.title}" (ID: ${chat.id})`);
+        this.dynamicChatIds.delete(String(chat.id));
+      }
     });
 
     this.connected = true;
@@ -96,11 +150,21 @@ export class TelegramAdapter implements PlatformAdapter {
   }
 
   onMessage(handler: MessageHandler): void {
-    this.messageHandlers.push(handler);
+    if (this.messageHandler) {
+      throw new Error('TelegramAdapter: onMessage handler already registered');
+    }
+    this.messageHandler = handler;
+  }
+
+  onGroupJoin(handler: (chatId: string, title: string) => void): void {
+    this.groupJoinHandler = handler;
   }
 
   onCallback(handler: CallbackHandler): void {
-    this.callbackHandlers.push(handler);
+    if (this.callbackHandler) {
+      throw new Error('TelegramAdapter: onCallback handler already registered');
+    }
+    this.callbackHandler = handler;
   }
 
   async send(message: OutgoingMessage): Promise<string | undefined> {
@@ -186,8 +250,12 @@ export class TelegramAdapter implements PlatformAdapter {
   }
 
   async downloadFile(fileId: string): Promise<Buffer> {
-    const filePath = await this.bot.getFileLink(fileId);
-    const response = await fetch(filePath);
+    const fileLink = await this.bot.getFileLink(fileId);
+    // Local Bot API server returns filesystem paths starting with /
+    if (fileLink.startsWith('/')) {
+      return readFileSync(fileLink);
+    }
+    const response = await fetch(fileLink);
     return Buffer.from(await response.arrayBuffer());
   }
 
@@ -197,6 +265,13 @@ export class TelegramAdapter implements PlatformAdapter {
 
   async sendChatAction(chatId: string, action: string): Promise<void> {
     await this.bot.sendChatAction(chatId, action as TelegramBot.ChatAction);
+  }
+
+  async setMessageReaction(chatId: string, messageId: string, emoji?: string): Promise<void> {
+    const reaction = emoji
+      ? [{ type: 'emoji' as const, emoji }]
+      : [];
+    await this.bot.setMessageReaction(chatId, Number(messageId), { reaction: reaction as any });
   }
 
   async getBotInfo(): Promise<{ id: string; username?: string }> {
