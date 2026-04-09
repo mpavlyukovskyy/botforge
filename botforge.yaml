@@ -30,9 +30,10 @@ bots:
     service: botforge-ashley
     port: 8084
   alfred:
-    config: bots/alfred.yaml
-    service: botforge-alfred
+    config: standalone/taskbot
+    service: taskbot
     port: 8088
+    dashboard_port: 8090
   chief-of-staff:
     config: bots/chief-of-staff.yaml
     service: botforge-chief-of-staff
