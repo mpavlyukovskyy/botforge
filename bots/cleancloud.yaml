@@ -1,0 +1,87 @@
+name: CleanCloud
+version: "1.0"
+description: CleanCloud price & product management bot — automates admin panel via headless browser
+
+platform:
+  type: telegram
+  token: ${CLEANCLOUD_BOT_TOKEN}
+  chat_ids: []
+  mode: polling
+
+brain:
+  provider: claude
+  model: claude-sonnet-4-6
+  system_prompt_file: cleancloud/prompts/cleancloud.md
+  tools:
+    - list_sections
+    - list_products
+    - search_products
+    - set_price
+    - bulk_set_prices
+    - adjust_prices
+    - add_product
+    - move_product
+    - rename_section
+    - compare_sections
+    - compare_prices
+    - price_history
+    - submit_login_code
+    - refresh_cache
+    - screenshot
+  temperature: 0
+  max_tokens: 4096
+
+memory:
+  conversation_history:
+    enabled: true
+    ttl_days: 30
+    max_messages: 100
+  context_blocks:
+    - type: catalog_summary
+      label: catalog_summary
+    - type: browser_status
+      label: browser_status
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule:
+  sync_cleancloud:
+    cron: "0 18 * * *"
+    timezone: UTC
+  browser_keepalive:
+    cron: "*/30 * * * *"
+    timezone: UTC
+  conversation_cleanup:
+    cron: "0 4 * * *"
+    timezone: UTC
+
+health:
+  port: 8093
+  path: /api/health
+
+behavior:
+  reception:
+    dm_mode: always
+    group_mode: passive
+    respond_to_replies: true
+    respond_to_mentions: true
+    keywords: ["cleancloud"]
+    case_sensitive: false
+  response:
+    typing_indicator: true
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 4000
+  concurrency:
+    chat_lock: true
+  continuity:
+    reply_context: true
+
+env_file: ../.env
