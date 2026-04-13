@@ -28,6 +28,7 @@ brain:
     - submit_login_code
     - refresh_cache
     - screenshot
+    - read_document
   temperature: 0
   max_tokens: 4096
 

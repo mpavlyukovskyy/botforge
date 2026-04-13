@@ -233,10 +233,16 @@ function createBrainProcessor(
 
     // Pre-brain media download
     let files: Buffer[] | undefined;
+    let fileMetadata: ToolContext['fileMetadata'];
     if (message.file?.fileId && inst.adapter.downloadFile) {
       try {
         const buffer = await inst.adapter.downloadFile(message.file.fileId);
         files = [buffer];
+        fileMetadata = [{
+          fileName: message.file.fileName,
+          mimeType: message.file.mimeType,
+          fileSize: message.file.fileSize,
+        }];
       } catch (err) {
         log.warn(`Failed to download file ${message.file.fileId}: ${err}`);
       }
@@ -253,6 +259,7 @@ function createBrainProcessor(
       log,
       store: inst.store,
       files,
+      fileMetadata,
     };
 
     const brainTools = toolRegistry.toBrainTools(toolCtx);
@@ -319,6 +326,17 @@ function createBrainProcessor(
     // Clear any previous post-response actions
     inst.store.delete('postResponse');
 
+    // Build userMessage with file metadata for document attachments
+    let userMessage = message.text ?? '';
+    if (message.type === 'document' && files?.length) {
+      const fn = message.file?.fileName || 'unnamed file';
+      const mt = message.file?.mimeType || 'unknown type';
+      const sz = message.file?.fileSize ? `${Math.round(message.file.fileSize / 1024)} KB` : 'unknown size';
+      const fileLine = `\n\n[Attached document: "${fn}" (${mt}, ${sz}). Use the read_document tool to extract its contents.]`;
+      userMessage = (userMessage || '') + fileLine;
+    }
+    if (!userMessage) userMessage = '[media message]';
+
     try {
       if (config.brain.provider === 'claude') {
         const brainPromise = askBrain(
@@ -330,7 +348,7 @@ function createBrainProcessor(
             maxBudgetUsd: config.brain.max_budget_usd ?? 1.0,
           },
           {
-            userMessage: message.text ?? '[media message]',
+            userMessage,
             tools: brainTools,
             conversationHistory,
             contextBlocks,
@@ -353,7 +371,7 @@ function createBrainProcessor(
             maxTurns: config.brain.max_iterations ?? 5,
           },
           {
-            userMessage: message.text ?? '[media message]',
+            userMessage,
             tools: brainTools,
             conversationHistory,
             contextBlocks,
@@ -383,7 +401,7 @@ function createBrainProcessor(
             maxTokens: config.brain.max_tokens,
           },
           {
-            userMessage: message.text ?? '[media message]',
+            userMessage,
             contextBlocks,
           },
         );

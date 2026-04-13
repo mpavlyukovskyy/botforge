@@ -46,6 +46,12 @@ export interface ToolContext {
   store: Map<string, unknown>;
   /** Attached files (e.g. downloaded photos) */
   files?: Buffer[];
+  /** Metadata for attached files (parallel array to files) */
+  fileMetadata?: Array<{
+    fileName?: string;
+    mimeType?: string;
+    fileSize?: number;
+  }>;
 }
 
 // ─── Permission Sandbox ─────────────────────────────────────────────────────
