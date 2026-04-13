@@ -71,7 +71,11 @@ const DISALLOWED_BUILTIN_TOOLS = [
  * Each call spawns a Claude Code child process (~60MB, 3-10s cold start).
  * Acceptable for chat bots where users expect thinking time.
  */
-export async function askBrain(config: BrainConfig, input: BrainInput): Promise<BrainResponse> {
+export async function askBrain(
+  config: BrainConfig,
+  input: BrainInput,
+  log?: { info(msg: string, ...a: unknown[]): void; debug(msg: string, ...a: unknown[]): void; warn(msg: string, ...a: unknown[]): void },
+): Promise<BrainResponse> {
   // 1. Build MCP server from registered tools
   const mcpServer = createSdkMcpServer({
     name: config.name,
@@ -120,6 +124,12 @@ export async function askBrain(config: BrainConfig, input: BrainInput): Promise<
         thinking: { type: 'disabled' },
       },
     })) {
+      if (log) {
+        const t = (message as any).type ?? 'unknown';
+        if (t !== 'result') {
+          log.debug(`Brain [${config.name}]: event=${t}`);
+        }
+      }
       if (message.type === 'result') {
         if (message.subtype === 'success') {
           resultText = message.result;

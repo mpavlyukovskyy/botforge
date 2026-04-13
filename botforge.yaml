@@ -25,10 +25,6 @@ bots:
     config: bots/babushka.yaml
     service: botforge-babushka
     port: 8085
-  ashley:
-    config: bots/ashley.yaml
-    service: botforge-ashley
-    port: 8084
   alfred:
     config: standalone/taskbot
     service: taskbot
@@ -42,6 +38,10 @@ bots:
     config: bots/trainer.yaml
     service: botforge-trainer
     port: 8092
+  cleancloud:
+    config: bots/cleancloud.yaml
+    service: botforge-cleancloud
+    port: 8093
   test-echo:
     config: bots/test-echo.yaml
     port: 9001

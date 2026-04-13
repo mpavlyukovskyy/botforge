@@ -248,6 +248,8 @@ function createBrainProcessor(
       }
     }
 
+    log.info(`Brain: type=${message.type} file=${!!message.file} downloaded=${files?.length ?? 0}`);
+
     // Build tool context for this message
     const toolCtx: ToolContext = {
       chatId: message.chatId,
@@ -330,12 +332,34 @@ function createBrainProcessor(
     let userMessage = message.text ?? '';
     if (message.type === 'document' && files?.length) {
       const fn = message.file?.fileName || 'unnamed file';
-      const mt = message.file?.mimeType || 'unknown type';
-      const sz = message.file?.fileSize ? `${Math.round(message.file.fileSize / 1024)} KB` : 'unknown size';
-      const fileLine = `\n\n[Attached document: "${fn}" (${mt}, ${sz}). Use the read_document tool to extract its contents.]`;
-      userMessage = (userMessage || '') + fileLine;
+      const readDocTool = brainTools.find(t => t.name === 'read_document');
+      if (readDocTool) {
+        try {
+          log.info(`Pre-parsing document: ${fn}`);
+          const result = await readDocTool.execute({});
+          const parsed = result.content.map(c => c.text).join('\n');
+          if (!result.isError) {
+            const truncated = parsed.length > 15000
+              ? parsed.slice(0, 15000) + '\n\n[...truncated — call read_document for full contents]'
+              : parsed;
+            userMessage += `\n\n[Document: "${fn}" — parsed contents below]\n${truncated}`;
+            log.info(`Document pre-parsed OK: ${parsed.length} chars`);
+          } else {
+            log.warn(`Document pre-parse error: ${parsed.slice(0, 200)}`);
+            userMessage += `\n\n[Attached document: "${fn}" — parse failed. Use read_document tool to retry.]`;
+          }
+        } catch (err) {
+          log.warn(`Document pre-parse exception: ${err}`);
+          userMessage += `\n\n[Attached document: "${fn}". Use read_document tool to extract contents.]`;
+        }
+      } else {
+        const mt = message.file?.mimeType || 'unknown type';
+        const sz = message.file?.fileSize ? `${Math.round(message.file.fileSize / 1024)} KB` : 'unknown size';
+        userMessage += `\n\n[Attached document: "${fn}" (${mt}, ${sz}). Use the read_document tool to extract its contents.]`;
+      }
     }
     if (!userMessage) userMessage = '[media message]';
+    log.info(`UserMessage (${userMessage.length} chars): ${userMessage.slice(0, 200)}`);
 
     try {
       if (config.brain.provider === 'claude') {
@@ -353,6 +377,7 @@ function createBrainProcessor(
             conversationHistory,
             contextBlocks,
           },
+          log,
         );
         const BRAIN_TIMEOUT_MS = 120_000; // 2 minutes
         brainResponse = await Promise.race([

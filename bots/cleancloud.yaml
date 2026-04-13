@@ -68,6 +68,8 @@ health:
   path: /api/health
 
 behavior:
+  message_types:
+    document: true
   reception:
     dm_mode: always
     group_mode: passive
