@@ -13,7 +13,7 @@ export default {
     const chatId = ctx.chatId;
 
     try {
-      await sendWorkoutPrompt(ctx, chatId);
+      await sendWorkoutPrompt(ctx, chatId, { source: 'command' });
     } catch (err) {
       await ctx.adapter.send({
         chatId,
