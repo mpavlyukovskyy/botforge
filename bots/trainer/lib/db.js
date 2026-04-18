@@ -136,6 +136,11 @@ export function runMigrations(ctx) {
     );
   `);
 
+  // ── Add pushed_at to pending_workouts ─────────────────────────────────
+  try {
+    db.exec('ALTER TABLE pending_workouts ADD COLUMN pushed_at TEXT');
+  } catch { /* column already exists */ }
+
   // ── Onboarding analysis (singleton row, id=1) ──────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS onboarding_analysis (
@@ -233,6 +238,29 @@ export function upsertRecovery(config, data) {
     data.combined_readiness ?? null,
     data.raw_json ? JSON.stringify(data.raw_json) : null
   );
+}
+
+export function refreshWhoopRecovery(config, date, recoveryScore, hrv, rhr) {
+  const db = ensureDb(config);
+  const existing = db.prepare(
+    'SELECT eightsleep_sleep_score FROM recovery_daily WHERE date = ?'
+  ).get(date);
+  if (!existing) return false;
+
+  const scores = [];
+  if (recoveryScore != null) scores.push(recoveryScore);
+  if (existing.eightsleep_sleep_score != null) scores.push(existing.eightsleep_sleep_score);
+  const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+  const readiness = avg == null ? 'unknown'
+    : avg >= 67 ? 'green' : avg >= 34 ? 'yellow' : 'red';
+
+  db.prepare(`
+    UPDATE recovery_daily
+    SET whoop_recovery_score = ?, whoop_hrv = ?, whoop_rhr = ?,
+        combined_readiness = ?, synced_at = datetime('now')
+    WHERE date = ?
+  `).run(recoveryScore, hrv, rhr, readiness, date);
+  return true;
 }
 
 export function getRecoveryRange(config, startDate, endDate) {
@@ -384,6 +412,13 @@ export function getPendingWorkout(config, id) {
 export function deletePendingWorkout(config, id) {
   const db = ensureDb(config);
   db.prepare('DELETE FROM pending_workouts WHERE id = ?').run(id);
+}
+
+export function markPendingWorkoutPushed(config, id, routineTitle) {
+  const db = ensureDb(config);
+  db.prepare(
+    "UPDATE pending_workouts SET pushed_at = datetime('now'), title = COALESCE(?, title) WHERE id = ?"
+  ).run(routineTitle || null, id);
 }
 
 export function getAllCachedWorkouts(config) {
