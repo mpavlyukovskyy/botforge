@@ -7,6 +7,7 @@
  */
 import { ensureDb, createCheckIn, getPendingWorkout, markPendingWorkoutPushed, getAllExerciseTemplates } from '../lib/db.js';
 import { createRoutine } from '../lib/hevy-client.js';
+import { sendFeedbackPrompt } from './workout-feedback.js';
 
 export default {
   prefix: 'wa',
@@ -130,6 +131,14 @@ export default {
           markPendingWorkoutPushed(ctx.config, pendingId, routineTitle);
         } catch (e) {
           ctx.log?.warn?.(`Failed to mark workout ${pendingId} as pushed: ${e.message}`);
+        }
+
+        // Trigger post-workout feedback prompt
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          await sendFeedbackPrompt(ctx, chatId, pending.title || 'your workout', today);
+        } catch (e) {
+          ctx.log?.warn?.(`Feedback prompt failed: ${e.message}`);
         }
       } catch (err) {
         ctx.log?.warn?.(`Hevy push failed: ${err.message}`);

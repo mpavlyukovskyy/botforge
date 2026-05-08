@@ -608,6 +608,13 @@ export function getRecentFeedback(config, limit = 3) {
   ).all(limit);
 }
 
+export function getFeedbackForDate(config, date) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM workout_feedback WHERE workout_date = ? ORDER BY created_at DESC'
+  ).all(date);
+}
+
 // ─── Weekly adjustment helpers ──────────────────────────────────────────────
 
 export function saveWeeklyAdjustment(config, data) {

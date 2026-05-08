@@ -10,7 +10,7 @@
  *
  * callback_data format: 'wf:STEP:VALUE' or 'wf:STEP:VALUE:EXTRA'
  */
-import { ensureDb, getActiveProgram, saveWorkoutFeedback } from '../lib/db.js';
+import { ensureDb, getActiveProgram, saveWorkoutFeedback, getFeedbackForDate } from '../lib/db.js';
 
 export default {
   prefix: 'wf',
@@ -118,14 +118,15 @@ async function saveFeedback(ctx, chatId, painLocation) {
   const energy = ctx.store.get('feedback_energy') || 'normal';
   const pain = ctx.store.get('feedback_pain') || 'none';
 
-  const today = new Date().toISOString().slice(0, 10);
+  const workoutDate = ctx.store.get('feedback_workout_date')
+    || new Date().toISOString().slice(0, 10);
 
   // Get session title from last pending workout or fallback
   const sessionTitle = ctx.store.get('last_session_title') || null;
 
   try {
     saveWorkoutFeedback(ctx.config, {
-      workout_date: today,
+      workout_date: workoutDate,
       session_title: sessionTitle,
       fatigue_level: energy,
       rpe_accuracy: rpe,
@@ -140,6 +141,7 @@ async function saveFeedback(ctx, chatId, painLocation) {
   ctx.store.set('feedback_rpe', null);
   ctx.store.set('feedback_energy', null);
   ctx.store.set('feedback_pain', null);
+  ctx.store.set('feedback_workout_date', null);
 
   await ctx.answerCallback('Feedback saved');
   await ctx.adapter.send({
@@ -155,11 +157,17 @@ async function saveFeedback(ctx, chatId, painLocation) {
  * @param {object} ctx - Bot context
  * @param {string} chatId - Chat ID
  * @param {string} [sessionTitle] - Optional session title
+ * @param {string} [workoutDate] - Date of the workout (YYYY-MM-DD), defaults to today
  */
-export async function sendFeedbackPrompt(ctx, chatId, sessionTitle) {
+export async function sendFeedbackPrompt(ctx, chatId, sessionTitle, workoutDate) {
+  const program = getActiveProgram(ctx.config);
+  if (!program) return;
+
+  const date = workoutDate || new Date().toISOString().slice(0, 10);
   if (sessionTitle) {
     ctx.store.set('last_session_title', sessionTitle);
   }
+  ctx.store.set('feedback_workout_date', date);
 
   await ctx.adapter.send({
     chatId,
