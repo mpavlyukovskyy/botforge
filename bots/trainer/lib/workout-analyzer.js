@@ -325,51 +325,94 @@ function computeProgression(sortedWorkouts, topExercises) {
   const results = [];
 
   for (const { name } of topExercises) {
-    const performances = [];
+    const performances = getPerformancesForExercise(sortedWorkouts, name);
+    results.push(computeProgressionSlope(name, performances));
+  }
 
-    for (const w of sortedWorkouts) {
-      for (const ex of w.exercises || []) {
-        if ((ex.title || '').toLowerCase() !== name.toLowerCase()) continue;
-        const normalSets = (ex.sets || []).filter(s => s.type === 'normal');
-        if (normalSets.length === 0) continue;
+  return results;
+}
 
-        const topSet = normalSets.sort(
-          (a, b) => (b.weight_kg || 0) - (a.weight_kg || 0)
-        )[0];
-        performances.push({
-          date: w.start_time?.slice(0, 10),
-          weight: topSet.weight_kg || 0,
-          reps: topSet.reps || 0,
-        });
-      }
+/**
+ * Extract performance data for a specific exercise from sorted workouts.
+ */
+function getPerformancesForExercise(sortedWorkouts, exerciseName) {
+  const performances = [];
+
+  for (const w of sortedWorkouts) {
+    for (const ex of w.exercises || []) {
+      if ((ex.title || '').toLowerCase() !== exerciseName.toLowerCase()) continue;
+      const normalSets = (ex.sets || []).filter(s => s.type === 'normal');
+      if (normalSets.length === 0) continue;
+
+      const topSet = normalSets.sort(
+        (a, b) => (b.weight_kg || 0) - (a.weight_kg || 0)
+      )[0];
+      performances.push({
+        date: w.start_time?.slice(0, 10),
+        weight: topSet.weight_kg || 0,
+        reps: topSet.reps || 0,
+      });
     }
+  }
 
-    if (performances.length < 3) {
-      results.push({ exercise: name, data_points: performances.length, trend: 'insufficient data' });
-      continue;
-    }
+  return performances;
+}
 
-    // Compare earliest 1/3 vs recent 1/3
-    const third = Math.max(1, Math.floor(performances.length / 3));
-    const early = performances.slice(0, third);
-    const recent = performances.slice(-third);
-
-    const earlyAvg = early.reduce((s, p) => s + p.weight, 0) / early.length;
-    const recentAvg = recent.reduce((s, p) => s + p.weight, 0) / recent.length;
-    const change = earlyAvg > 0 ? Math.round(((recentAvg - earlyAvg) / earlyAvg) * 100) : 0;
-
-    let trend = 'stable';
-    if (change > 5) trend = 'progressing';
-    else if (change < -5) trend = 'regressing';
-
-    results.push({
-      exercise: name,
+/**
+ * Compute trend using linear regression slope on weight over sessions.
+ * Returns trend label + slope percentage.
+ */
+export function computeProgressionSlope(exerciseName, performances) {
+  if (performances.length < 4) {
+    return {
+      exercise: exerciseName,
       data_points: performances.length,
-      early_avg_kg: Math.round(earlyAvg * 10) / 10,
-      recent_avg_kg: Math.round(recentAvg * 10) / 10,
-      change_pct: change,
-      trend,
-    });
+      trend: 'insufficient',
+      slope: 0,
+    };
+  }
+
+  const n = performances.length;
+  const xs = performances.map((_, i) => i); // session index
+  const ys = performances.map(p => p.weight);
+
+  const xMean = xs.reduce((a, b) => a + b) / n;
+  const yMean = ys.reduce((a, b) => a + b) / n;
+
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - xMean) * (ys[i] - yMean);
+    den += (xs[i] - xMean) ** 2;
+  }
+
+  const slope = den !== 0 ? num / den : 0;
+  const slopePct = yMean !== 0 ? (slope / yMean) * 100 : 0;
+
+  const trend = slopePct > 2 ? 'progressing' : slopePct < -2 ? 'regressing' : 'stable';
+
+  return {
+    exercise: exerciseName,
+    data_points: n,
+    trend,
+    slope: Math.round(slopePct * 10) / 10,
+  };
+}
+
+/**
+ * Compute progression trends for all exercises in the active program.
+ * Unlike computeProgression which only does top 5 by volume,
+ * this takes an explicit list of exercise names.
+ *
+ * @param {Array} sortedWorkouts - Hevy API workout objects sorted by date ASC
+ * @param {string[]} exerciseNames - Exercise names from the active program
+ * @returns {Array} Progression results for each exercise
+ */
+export function computeProgramProgressions(sortedWorkouts, exerciseNames) {
+  const results = [];
+
+  for (const name of exerciseNames) {
+    const performances = getPerformancesForExercise(sortedWorkouts, name);
+    results.push(computeProgressionSlope(name, performances));
   }
 
   return results;

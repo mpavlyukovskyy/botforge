@@ -154,6 +154,98 @@ export function runMigrations(ctx) {
       completed_at TEXT
     );
   `);
+
+  // ── Exercise config (custom metadata, separate from Hevy-synced templates) ─
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS exercise_config (
+      exercise_title TEXT PRIMARY KEY,
+      category TEXT DEFAULT 'compound',
+      increment_kg REAL DEFAULT 2.5,
+      fatigue_weight REAL DEFAULT 1.0,
+      recovery_hours INTEGER DEFAULT 72,
+      muscle_groups TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // ── Exercise progression (double progression state per exercise per program) ─
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS exercise_progression (
+      exercise_title TEXT NOT NULL,
+      program_id INTEGER NOT NULL,
+      current_weight_kg REAL,
+      prescribed_rep_range TEXT,
+      last_sets_json TEXT,
+      consecutive_top_count INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      stall_weeks INTEGER DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (exercise_title, program_id)
+    );
+  `);
+
+  // ── Workout feedback (post-workout subjective feedback) ─────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workout_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workout_date TEXT NOT NULL,
+      session_title TEXT,
+      fatigue_level TEXT,
+      rpe_accuracy TEXT,
+      joint_pain TEXT,
+      joint_pain_location TEXT,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // ── Muscle fatigue JSON column on recovery_daily ────────────────────────
+  try {
+    db.exec('ALTER TABLE recovery_daily ADD COLUMN muscle_fatigue_json TEXT');
+  } catch { /* column already exists */ }
+
+  // ── Weekly adjustments (structured review-to-next-week adjustments) ─────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS weekly_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      program_id INTEGER NOT NULL,
+      week_number INTEGER NOT NULL,
+      volume_delta INTEGER DEFAULT 0,
+      rpe_delta REAL DEFAULT 0,
+      recommendation TEXT,
+      exercises_to_watch TEXT,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(program_id, week_number)
+    );
+  `);
+
+  // ── Program history (exercise usage + final status per completed program) ─
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS program_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      program_id INTEGER NOT NULL,
+      exercise_title TEXT NOT NULL,
+      total_sessions INTEGER,
+      final_status TEXT,
+      final_weight_kg REAL,
+      muscle_group TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // ── Backfill volume_progression for active programs that lack it ────────
+  const activePrograms = db.prepare("SELECT id, program_json FROM training_programs WHERE status = 'active'").all();
+  for (const p of activePrograms) {
+    try {
+      const data = JSON.parse(p.program_json);
+      if (!data.volume_progression) {
+        data.volume_progression = { strategy: 'none' };
+        db.prepare('UPDATE training_programs SET program_json = ? WHERE id = ?')
+          .run(JSON.stringify(data), p.id);
+      }
+    } catch { /* skip malformed JSON */ }
+  }
 }
 
 // ─── Goal helpers ───────────────────────────────────────────────────────────
@@ -424,4 +516,166 @@ export function markPendingWorkoutPushed(config, id, routineTitle) {
 export function getAllCachedWorkouts(config) {
   const db = ensureDb(config);
   return db.prepare('SELECT * FROM workout_cache ORDER BY date DESC').all();
+}
+
+// ─── Exercise config helpers ────────────────────────────────────────────────
+
+export function getExerciseConfig(config, exerciseTitle) {
+  const db = ensureDb(config);
+  return db.prepare('SELECT * FROM exercise_config WHERE exercise_title = ?').get(exerciseTitle);
+}
+
+export function upsertExerciseConfig(config, data) {
+  const db = ensureDb(config);
+  return db.prepare(`
+    INSERT OR REPLACE INTO exercise_config
+      (exercise_title, category, increment_kg, fatigue_weight, recovery_hours, muscle_groups, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM exercise_config WHERE exercise_title = ?), datetime('now')))
+  `).run(
+    data.exercise_title,
+    data.category || 'compound',
+    data.increment_kg ?? 2.5,
+    data.fatigue_weight ?? 1.0,
+    data.recovery_hours ?? 72,
+    data.muscle_groups ? (typeof data.muscle_groups === 'string' ? data.muscle_groups : JSON.stringify(data.muscle_groups)) : null,
+    data.exercise_title
+  );
+}
+
+export function getAllExerciseConfigs(config) {
+  const db = ensureDb(config);
+  return db.prepare('SELECT * FROM exercise_config ORDER BY exercise_title').all();
+}
+
+// ─── Exercise progression helpers ───────────────────────────────────────────
+
+export function getExerciseProgression(config, exerciseTitle, programId) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM exercise_progression WHERE exercise_title = ? AND program_id = ?'
+  ).get(exerciseTitle, programId);
+}
+
+export function upsertExerciseProgression(config, data) {
+  const db = ensureDb(config);
+  return db.prepare(`
+    INSERT OR REPLACE INTO exercise_progression
+      (exercise_title, program_id, current_weight_kg, prescribed_rep_range, last_sets_json,
+       consecutive_top_count, status, stall_weeks, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(
+    data.exercise_title,
+    data.program_id,
+    data.current_weight_kg ?? null,
+    data.prescribed_rep_range ?? null,
+    data.last_sets_json ?? null,
+    data.consecutive_top_count ?? 0,
+    data.status ?? 'active',
+    data.stall_weeks ?? 0
+  );
+}
+
+export function getProgressionForProgram(config, programId) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM exercise_progression WHERE program_id = ? ORDER BY exercise_title'
+  ).all(programId);
+}
+
+// ─── Workout feedback helpers ───────────────────────────────────────────────
+
+export function saveWorkoutFeedback(config, data) {
+  const db = ensureDb(config);
+  return db.prepare(`
+    INSERT INTO workout_feedback
+      (workout_date, session_title, fatigue_level, rpe_accuracy, joint_pain, joint_pain_location, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.workout_date,
+    data.session_title ?? null,
+    data.fatigue_level ?? null,
+    data.rpe_accuracy ?? null,
+    data.joint_pain ?? null,
+    data.joint_pain_location ?? null,
+    data.notes ?? null
+  );
+}
+
+export function getRecentFeedback(config, limit = 3) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM workout_feedback ORDER BY workout_date DESC, created_at DESC LIMIT ?'
+  ).all(limit);
+}
+
+// ─── Weekly adjustment helpers ──────────────────────────────────────────────
+
+export function saveWeeklyAdjustment(config, data) {
+  const db = ensureDb(config);
+  return db.prepare(`
+    INSERT OR REPLACE INTO weekly_adjustments
+      (program_id, week_number, volume_delta, rpe_delta, recommendation, exercises_to_watch, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.program_id,
+    data.week_number,
+    data.volume_delta ?? 0,
+    data.rpe_delta ?? 0,
+    data.recommendation ?? null,
+    data.exercises_to_watch ? (typeof data.exercises_to_watch === 'string' ? data.exercises_to_watch : JSON.stringify(data.exercises_to_watch)) : null,
+    data.notes ?? null
+  );
+}
+
+export function getWeeklyAdjustment(config, programId, weekNumber) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM weekly_adjustments WHERE program_id = ? AND week_number = ?'
+  ).get(programId, weekNumber);
+}
+
+// ─── Program history helpers ────────────────────────────────────────────────
+
+export function saveProgramHistory(config, programId, exercises) {
+  const db = ensureDb(config);
+  const stmt = db.prepare(`
+    INSERT INTO program_history
+      (program_id, exercise_title, total_sessions, final_status, final_weight_kg, muscle_group)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = db.transaction((rows) => {
+    for (const row of rows) {
+      stmt.run(
+        programId,
+        row.exercise_title,
+        row.total_sessions ?? null,
+        row.final_status ?? null,
+        row.final_weight_kg ?? null,
+        row.muscle_group ?? null
+      );
+    }
+  });
+  insertMany(exercises);
+}
+
+export function getRecentProgramHistory(config, limit = 2) {
+  const db = ensureDb(config);
+  // Get exercises from last N completed programs
+  return db.prepare(`
+    SELECT ph.*, tp.title as program_title
+    FROM program_history ph
+    JOIN training_programs tp ON tp.id = ph.program_id
+    WHERE tp.status = 'completed'
+    ORDER BY ph.created_at DESC
+    LIMIT ?
+  `).all(limit * 20); // ~20 exercises per program
+}
+
+// ─── Recovery daily helpers (muscle fatigue) ────────────────────────────────
+
+export function updateMuscleFatigue(config, date, muscleFatigueJson) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'UPDATE recovery_daily SET muscle_fatigue_json = ? WHERE date = ?'
+  ).run(typeof muscleFatigueJson === 'string' ? muscleFatigueJson : JSON.stringify(muscleFatigueJson), date);
 }
