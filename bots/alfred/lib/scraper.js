@@ -106,7 +106,11 @@ export async function scrapeMenu(log) {
 
   let browser;
   try {
-    mkdirSync(DEBUG_DIR, { recursive: true });
+    try {
+      mkdirSync(DEBUG_DIR, { recursive: true });
+    } catch (dirErr) {
+      log?.warn(`Debug directory creation failed: ${dirErr.message}`);
+    }
 
     browser = await chromium.launch({
       headless: true,
@@ -142,7 +146,9 @@ export async function scrapeMenu(log) {
 
     // Verify login succeeded — should be at /app
     if (!page.url().includes('/app')) {
-      await page.screenshot({ path: `${DEBUG_DIR}/login-failed.png` });
+      try {
+        await page.screenshot({ path: `${DEBUG_DIR}/login-failed.png` });
+      } catch { /* debug screenshot best-effort */ }
       throw new Error(`Login failed — landed at ${page.url()}`);
     }
     log?.info('Login successful');
@@ -268,7 +274,11 @@ export async function scrapeMenu(log) {
         }
       }
 
-      await page.screenshot({ path: `${DEBUG_DIR}/${dayInfo.day.toLowerCase()}.png` });
+      try {
+        await page.screenshot({ path: `${DEBUG_DIR}/${dayInfo.day.toLowerCase()}.png` });
+      } catch (ssErr) {
+        log?.warn(`Debug screenshot failed for ${dayInfo.day}: ${ssErr.message}`);
+      }
     }
 
     log?.info(`Scraped ${allItems.length} total menu items across ${weekdayDates.length} days`);
