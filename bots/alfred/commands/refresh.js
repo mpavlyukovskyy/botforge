@@ -8,10 +8,25 @@
 import {
   ensureDb, storeMenuItems, storeRecommendations, logScrape,
   getCurrentWeekOf, getMenuForWeek, getRecommendationsForWeek,
-  dbMenuToAnalysisFormat,
+  dbMenuToAnalysisFormat, getLunchOrdersForWeek,
 } from '../lib/db.js';
 import { analyzeMenu } from '../lib/analysis.js';
-import { formatRecommendations } from '../lib/formatter.js';
+import { formatRecommendationsWithButtons } from '../lib/formatter.js';
+
+async function sendRecsWithButtons(recs, weekOf, chatId, ctx) {
+  const orders = getLunchOrdersForWeek(ctx.config, weekOf);
+  const existingOrders = new Map();
+  for (const o of orders) existingOrders.set(o.day, o.rank);
+
+  const dayMessages = formatRecommendationsWithButtons(recs, weekOf, existingOrders);
+  for (const dm of dayMessages) {
+    const msg = { chatId, text: dm.text, parseMode: 'Markdown' };
+    if (dm.buttons.length > 0) {
+      msg.inlineKeyboard = [dm.buttons];
+    }
+    await ctx.adapter.send(msg);
+  }
+}
 
 export default {
   command: 'refresh',
@@ -59,10 +74,7 @@ export default {
         }
 
         if (recs.length > 0) {
-          const messages = formatRecommendations(recs, weekOf);
-          for (const text of messages) {
-            await ctx.adapter.send({ chatId, text, parseMode: 'Markdown' });
-          }
+          await sendRecsWithButtons(recs, weekOf, chatId, ctx);
           return;
         }
 
@@ -130,16 +142,9 @@ export default {
       storeRecommendations(ctx.config, scrapeWeekOf, recommendations);
     }
 
-    // Send formatted recommendations
+    // Send formatted recommendations with order buttons
     if (recommendations.length > 0) {
-      const messages = formatRecommendations(recommendations, scrapeWeekOf);
-      for (const text of messages) {
-        await ctx.adapter.send({
-          chatId,
-          text,
-          parseMode: 'Markdown',
-        });
-      }
+      await sendRecsWithButtons(recommendations, scrapeWeekOf, chatId, ctx);
     } else {
       await ctx.adapter.send({
         chatId,

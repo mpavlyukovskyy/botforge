@@ -114,6 +114,26 @@ export function runMigrations(ctx) {
     `);
   }
 
+  // ── Lunch orders ──────────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lunch_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      week_of TEXT NOT NULL,
+      day TEXT NOT NULL,
+      rank INTEGER NOT NULL,
+      item_name TEXT NOT NULL,
+      restaurant TEXT,
+      price REAL,
+      combo_json TEXT,
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      confirmed_at TEXT DEFAULT (datetime('now')),
+      ordered_at TEXT,
+      error_message TEXT,
+      UNIQUE(week_of, day)
+    );
+    CREATE INDEX IF NOT EXISTS idx_orders_week ON lunch_orders(week_of);
+  `);
+
   // ── Scrape log ──────────────────────────────────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS scrape_log (
@@ -170,6 +190,7 @@ export function getMenuForWeek(config, weekOf, day) {
 export function storeRecommendations(config, weekOf, recs) {
   const db = ensureDb(config);
   db.prepare('DELETE FROM lunch_recommendations WHERE week_of = ?').run(weekOf);
+  db.prepare('DELETE FROM lunch_orders WHERE week_of = ?').run(weekOf);
   const insert = db.prepare(`
     INSERT INTO lunch_recommendations
       (week_of, day, date, rank, item_name, restaurant, price,
@@ -238,6 +259,47 @@ export function logScrape(config, weekOf, status, itemCount, errorMessage) {
  * Get the Monday of the current (or next) week as YYYY-MM-DD.
  * On Sunday, returns the upcoming Monday.
  */
+// ─── Lunch order helpers ────────────────────────────────────────────────────
+
+export function confirmLunchOrder(config, weekOf, day, rank) {
+  const db = ensureDb(config);
+  const rec = db.prepare(
+    'SELECT * FROM lunch_recommendations WHERE week_of = ? AND day = ? AND rank = ?'
+  ).get(weekOf, day, rank);
+  if (!rec) return null;
+
+  db.prepare(`
+    INSERT OR REPLACE INTO lunch_orders
+      (week_of, day, rank, item_name, restaurant, price, combo_json, status, confirmed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', datetime('now'))
+  `).run(weekOf, day, rank, rec.item_name, rec.restaurant, rec.price, rec.combo_json);
+
+  return db.prepare(
+    'SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?'
+  ).get(weekOf, day);
+}
+
+export function getLunchOrder(config, weekOf, day) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?'
+  ).get(weekOf, day);
+}
+
+export function getLunchOrdersForWeek(config, weekOf) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM lunch_orders WHERE week_of = ? ORDER BY day'
+  ).all(weekOf);
+}
+
+export function clearLunchOrders(config, weekOf) {
+  const db = ensureDb(config);
+  db.prepare('DELETE FROM lunch_orders WHERE week_of = ?').run(weekOf);
+}
+
+// ─── Week helpers ───────────────────────────────────────────────────────────
+
 export function getCurrentWeekOf() {
   const now = new Date();
   const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon, ...
