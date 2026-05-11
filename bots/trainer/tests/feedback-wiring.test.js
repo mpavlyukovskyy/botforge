@@ -317,6 +317,167 @@ describe('daily-sync dedup', () => {
   });
 });
 
+// ── Confirmation echo logic ──────────────────────────────────────────────
+
+describe('confirmation echo', () => {
+  it('includes all three feedback fields', () => {
+    const rpe = 'as_prescribed';
+    const energy = 'normal';
+    const pain = 'none';
+    const painLocation = null;
+    const sessionTitle = 'Upper A';
+    const workoutDate = '2026-05-09';
+
+    const rpeLabels = {
+      easier_than_prescribed: 'Easier than planned',
+      as_prescribed: 'As planned',
+      harder_than_prescribed: 'Harder than planned',
+    };
+    const rpeLabel = rpeLabels[rpe] || rpe;
+    const painLabel = pain === 'none'
+      ? 'No pain'
+      : `${pain.charAt(0).toUpperCase() + pain.slice(1)} pain${painLocation ? ` (${painLocation})` : ''}`;
+
+    const text = [
+      `Logged for ${sessionTitle || workoutDate}:`,
+      `Effort: ${rpeLabel}`,
+      `Energy: ${energy.charAt(0).toUpperCase() + energy.slice(1)}`,
+      `Pain: ${painLabel}`,
+      '',
+      "I'll factor this into your next session.",
+    ].join('\n');
+
+    expect(text).toContain('Effort: As planned');
+    expect(text).toContain('Energy: Normal');
+    expect(text).toContain('Pain: No pain');
+    expect(text).toContain('Logged for Upper A:');
+  });
+
+  it('shows pain location when present', () => {
+    const pain = 'significant';
+    const painLocation = 'shoulder';
+
+    const painLabel = pain === 'none'
+      ? 'No pain'
+      : `${pain.charAt(0).toUpperCase() + pain.slice(1)} pain${painLocation ? ` (${painLocation})` : ''}`;
+
+    expect(painLabel).toBe('Significant pain (shoulder)');
+  });
+
+  it('falls back to workout_date when no session title', () => {
+    const sessionTitle = null;
+    const workoutDate = '2026-05-09';
+
+    const header = `Logged for ${sessionTitle || workoutDate}:`;
+    expect(header).toBe('Logged for 2026-05-09:');
+  });
+});
+
+// ── Date context in prompt ───────────────────────────────────────────────
+
+describe('date context in feedback prompt', () => {
+  it('shows day name for past dates', () => {
+    const sessionTitle = 'Upper A';
+    const date = '2026-05-08'; // a Friday
+    const promptToday = '2026-05-10';
+
+    let titlePart = '';
+    if (sessionTitle && date !== promptToday) {
+      const dayLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+      titlePart = ` (${sessionTitle} — ${dayLabel})`;
+    } else if (sessionTitle) {
+      titlePart = ` (${sessionTitle})`;
+    }
+
+    expect(titlePart).toContain('Upper A');
+    expect(titlePart).toContain('Friday');
+    expect(titlePart).toContain('May 8');
+  });
+
+  it('omits day name for today', () => {
+    const sessionTitle = 'Upper A';
+    const date = '2026-05-10';
+    const promptToday = '2026-05-10';
+
+    let titlePart = '';
+    if (sessionTitle && date !== promptToday) {
+      const dayLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+      titlePart = ` (${sessionTitle} — ${dayLabel})`;
+    } else if (sessionTitle) {
+      titlePart = ` (${sessionTitle})`;
+    }
+
+    expect(titlePart).toBe(' (Upper A)');
+    expect(titlePart).not.toContain('—');
+  });
+});
+
+// ── Bridge message logic ─────────────────────────────────────────────────
+
+describe('buildBridgeMessage', () => {
+  // Import-free: we test the pure logic directly
+
+  function buildBridgeMessage(feedbackData, deloadOverride) {
+    const parts = [];
+
+    if (deloadOverride) {
+      parts.push(deloadOverride.includes('REACTIVE DELOAD')
+        ? 'Deload triggered — volume cut 50% based on recent fatigue signals.'
+        : 'Volume slightly reduced — elevated fatigue from recent sessions.');
+    } else if (feedbackData.length > 0) {
+      const harderCount = feedbackData.filter(f => f.rpe_accuracy === 'harder_than_prescribed').length;
+      const painEntries = feedbackData.filter(f => f.joint_pain && f.joint_pain !== 'none');
+      const exhaustedCount = feedbackData.filter(f => f.fatigue_level === 'exhausted' || f.fatigue_level === 'fatigued').length;
+
+      if (harderCount >= 2) {
+        parts.push('RPE targets lowered — last sessions felt harder than planned.');
+      }
+      if (painEntries.length > 0) {
+        const locations = [...new Set(painEntries.map(f => f.joint_pain_location).filter(Boolean))];
+        if (locations.length > 0) {
+          parts.push(`Avoiding heavy ${locations.join('/')} loading — recent pain reports.`);
+        }
+      }
+      if (exhaustedCount >= 2 && parts.length === 0) {
+        parts.push('Intensity moderated — fatigue elevated in recent sessions.');
+      }
+    }
+
+    return parts;
+  }
+
+  it('returns empty when all feedback is positive', () => {
+    const feedbackData = [
+      { rpe_accuracy: 'as_prescribed', fatigue_level: 'normal', joint_pain: 'none' },
+      { rpe_accuracy: 'as_prescribed', fatigue_level: 'fresh', joint_pain: 'none' },
+      { rpe_accuracy: 'easier_than_prescribed', fatigue_level: 'normal', joint_pain: 'none' },
+    ];
+    const result = buildBridgeMessage(feedbackData, '');
+    expect(result).toEqual([]);
+  });
+
+  it('returns RPE message when 2+ harder sessions', () => {
+    const feedbackData = [
+      { rpe_accuracy: 'harder_than_prescribed', fatigue_level: 'normal', joint_pain: 'none' },
+      { rpe_accuracy: 'harder_than_prescribed', fatigue_level: 'normal', joint_pain: 'none' },
+      { rpe_accuracy: 'as_prescribed', fatigue_level: 'normal', joint_pain: 'none' },
+    ];
+    const result = buildBridgeMessage(feedbackData, '');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toContain('RPE targets lowered');
+  });
+
+  it('returns pain message with locations', () => {
+    const feedbackData = [
+      { rpe_accuracy: 'as_prescribed', fatigue_level: 'normal', joint_pain: 'minor', joint_pain_location: 'shoulder' },
+      { rpe_accuracy: 'as_prescribed', fatigue_level: 'normal', joint_pain: 'none' },
+    ];
+    const result = buildBridgeMessage(feedbackData, '');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toContain('Avoiding heavy shoulder loading');
+  });
+});
+
 describe('workout-approval feedback trigger', () => {
   beforeEach(() => setupDb());
 

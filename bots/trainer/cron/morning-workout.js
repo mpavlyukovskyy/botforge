@@ -227,6 +227,45 @@ export function applyVolumeRamp(exercise, currentWeek, totalWeeks, volumeProgres
   };
 }
 
+// ─── Bridge message builder (exported for testing) ──────────────────────
+
+/**
+ * Build feedback bridge message parts explaining how recent feedback
+ * influenced the current workout. Returns an array of explanation strings.
+ *
+ * @param {Array} feedbackData - Recent feedback rows from DB
+ * @param {string} deloadOverride - Deload override string (or empty)
+ * @returns {string[]} Bridge message parts (empty array = no message)
+ */
+export function buildBridgeMessage(feedbackData, deloadOverride) {
+  const parts = [];
+
+  if (deloadOverride) {
+    parts.push(deloadOverride.includes('REACTIVE DELOAD')
+      ? 'Deload triggered — volume cut 50% based on recent fatigue signals.'
+      : 'Volume slightly reduced — elevated fatigue from recent sessions.');
+  } else if (feedbackData.length > 0) {
+    const harderCount = feedbackData.filter(f => f.rpe_accuracy === 'harder_than_prescribed').length;
+    const painEntries = feedbackData.filter(f => f.joint_pain && f.joint_pain !== 'none');
+    const exhaustedCount = feedbackData.filter(f => f.fatigue_level === 'exhausted' || f.fatigue_level === 'fatigued').length;
+
+    if (harderCount >= 2) {
+      parts.push('RPE targets lowered — last sessions felt harder than planned.');
+    }
+    if (painEntries.length > 0) {
+      const locations = [...new Set(painEntries.map(f => f.joint_pain_location).filter(Boolean))];
+      if (locations.length > 0) {
+        parts.push(`Avoiding heavy ${locations.join('/')} loading — recent pain reports.`);
+      }
+    }
+    if (exhaustedCount >= 2 && parts.length === 0) {
+      parts.push('Intensity moderated — fatigue elevated in recent sessions.');
+    }
+  }
+
+  return parts;
+}
+
 // ─── WORKOUT_JSON validation ─────────────────────────────────────────────
 
 function validateWorkoutJson(parsed, templateNames) {
@@ -314,10 +353,12 @@ export async function generateAdaptedWorkout(ctx, chatId, timeMinutes) {
   let feedbackContext = '';
   let fatigueContext = '';
   let deloadOverride = '';
+  let recentFeedbackData = [];
 
   try {
     // Recent feedback summary
-    const feedback = getRecentFeedback(ctx.config, 3);
+    recentFeedbackData = getRecentFeedback(ctx.config, 3);
+    const feedback = recentFeedbackData;
     if (feedback.length > 0) {
       const lines = feedback.map(f => {
         const parts = [f.workout_date];
@@ -693,4 +734,17 @@ Generate the adapted workout card.`;
     parseMode: 'Markdown',
     inlineKeyboard: [buttons],
   });
+
+  // ── Feedback bridge: explain how feedback influenced this workout ──────
+  try {
+    const bridgeParts = buildBridgeMessage(recentFeedbackData, deloadOverride);
+
+    if (bridgeParts.length > 0) {
+      await ctx.adapter.send({
+        chatId,
+        text: `_Based on your feedback: ${bridgeParts.join(' ')}_`,
+        parseMode: 'Markdown',
+      });
+    }
+  } catch { /* bridge message is non-critical */ }
 }

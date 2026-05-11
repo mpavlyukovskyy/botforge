@@ -51,7 +51,9 @@ export default {
         inlineKeyboard: [[
           { text: 'Fresh', callbackData: 'wf:energy:fresh' },
           { text: 'Normal', callbackData: 'wf:energy:normal' },
+        ], [
           { text: 'Fatigued', callbackData: 'wf:energy:fatigued' },
+          { text: 'Exhausted', callbackData: 'wf:energy:exhausted' },
         ]],
       });
       return;
@@ -90,6 +92,7 @@ export default {
           ], [
             { text: 'Elbow', callbackData: 'wf:location:elbow' },
             { text: 'Wrist', callbackData: 'wf:location:wrist' },
+            { text: 'Hip', callbackData: 'wf:location:hip' },
           ]],
         });
         return;
@@ -144,9 +147,28 @@ async function saveFeedback(ctx, chatId, painLocation) {
   ctx.store.set('feedback_workout_date', null);
 
   await ctx.answerCallback('Feedback saved');
+
+  // Build confirmation echo
+  const rpeLabels = {
+    easier_than_prescribed: 'Easier than planned',
+    as_prescribed: 'As planned',
+    harder_than_prescribed: 'Harder than planned',
+  };
+  const rpeLabel = rpeLabels[rpe] || rpe;
+  const painLabel = pain === 'none'
+    ? 'No pain'
+    : `${pain.charAt(0).toUpperCase() + pain.slice(1)} pain${painLocation ? ` (${painLocation})` : ''}`;
+
   await ctx.adapter.send({
     chatId,
-    text: 'Feedback logged — I\'ll factor this into your next session.',
+    text: [
+      `Logged for ${sessionTitle || workoutDate}:`,
+      `Effort: ${rpeLabel}`,
+      `Energy: ${energy.charAt(0).toUpperCase() + energy.slice(1)}`,
+      `Pain: ${painLabel}`,
+      '',
+      "I'll factor this into your next session.",
+    ].join('\n'),
   });
 }
 
@@ -169,9 +191,22 @@ export async function sendFeedbackPrompt(ctx, chatId, sessionTitle, workoutDate)
   }
   ctx.store.set('feedback_workout_date', date);
 
+  // Add day name when prompting about a past workout (e.g., daily-sync asking about yesterday)
+  const promptToday = new Date().toISOString().slice(0, 10);
+  let titlePart = '';
+  if (sessionTitle && date !== promptToday) {
+    const dayLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    titlePart = ` (${sessionTitle} — ${dayLabel})`;
+  } else if (sessionTitle) {
+    titlePart = ` (${sessionTitle})`;
+  } else if (date !== promptToday) {
+    const dayLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    titlePart = ` (${dayLabel})`;
+  }
+
   await ctx.adapter.send({
     chatId,
-    text: `How'd that session feel?${sessionTitle ? ` (${sessionTitle})` : ''}\n\nEffort vs plan:`,
+    text: `How'd that session feel?${titlePart}\n\nEffort vs plan:`,
     inlineKeyboard: [[
       { text: 'Easier', callbackData: 'wf:rpe:easier_than_prescribed' },
       { text: 'As planned', callbackData: 'wf:rpe:as_prescribed' },
