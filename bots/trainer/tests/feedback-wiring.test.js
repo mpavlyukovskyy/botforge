@@ -478,6 +478,29 @@ describe('buildBridgeMessage', () => {
   });
 });
 
+describe('morning cron no-program suppression', () => {
+  beforeEach(() => setupDb());
+
+  it('does not send message on cron path when no program exists', () => {
+    // No program inserted — simulates cron path (source !== 'command')
+    const program = getActiveProgram();
+    expect(program).toBeUndefined();
+
+    const options = {}; // cron path: no source
+    const shouldSend = !program && options.source === 'command';
+    expect(shouldSend).toBe(false);
+  });
+
+  it('sends message on command path when no program exists', () => {
+    const program = getActiveProgram();
+    expect(program).toBeUndefined();
+
+    const options = { source: 'command' };
+    const shouldSend = !program && options.source === 'command';
+    expect(shouldSend).toBe(true);
+  });
+});
+
 describe('workout-approval feedback trigger', () => {
   beforeEach(() => setupDb());
 

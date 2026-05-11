@@ -63,8 +63,11 @@ export async function sendWorkoutPrompt(ctx, chatId, options = {}) {
 
   const program = getActiveProgram(ctx.config);
 
-  // No program → check for onboarding analysis
+  // No program → only show onboarding/no-program prompts when user explicitly asks (/workout).
+  // Cron path stays silent to avoid daily spam.
   if (!program) {
+    if (options.source !== 'command') return;
+
     const analysis = getOnboardingAnalysis(ctx.config);
 
     if (analysis?.status === 'complete' && analysis.narrative) {
