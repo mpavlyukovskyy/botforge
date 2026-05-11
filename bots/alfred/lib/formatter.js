@@ -104,7 +104,7 @@ function formatDayBlock(day, dayRecs) {
  *
  * @param {Array} recs - Recommendation rows from DB
  * @param {string} weekOf - Week identifier (YYYY-MM-DD Monday)
- * @param {Map<string,number>} existingOrders - Map of day → confirmed rank
+ * @param {Map<string,{rank: number, status: string}>} existingOrders - Map of day → {rank, status}
  * @returns {Array<{day: string, text: string, buttons: Array<{text: string, callbackData: string}>}>}
  */
 export function formatRecommendationsWithButtons(recs, weekOf, existingOrders = new Map()) {
@@ -123,21 +123,51 @@ export function formatRecommendationsWithButtons(recs, weekOf, existingOrders = 
   return DAYS_ORDER.filter(d => byDay[d]).map(day => {
     const dayRecs = byDay[day];
     const abbrev = DAY_ABBREV[day];
-    const confirmedRank = existingOrders.get(day);
+    const orderInfo = existingOrders.get(day);
 
     let header = `*${day}*`;
-    if (confirmedRank != null) {
-      header += ` [CONFIRMED #${confirmedRank}]`;
+    let showButtons = true;
+
+    if (orderInfo != null) {
+      // Handle both old format (just rank number) and new format ({rank, status})
+      const status = typeof orderInfo === 'object' ? orderInfo.status : 'confirmed';
+      const rank = typeof orderInfo === 'object' ? orderInfo.rank : orderInfo;
+
+      switch (status) {
+        case 'ordered':
+          header += ` [ORDERED]`;
+          showButtons = false;
+          break;
+        case 'placing':
+          header += ` [PLACING...]`;
+          showButtons = false;
+          break;
+        case 'pending':
+          header += ` [PENDING CONFIRM]`;
+          showButtons = false;
+          break;
+        case 'confirmed':
+          header += ` [CONFIRMED #${rank}]`;
+          showButtons = false;
+          break;
+        case 'failed':
+          header += ` [FAILED]`;
+          showButtons = true; // Re-enable buttons so user can retry
+          break;
+        default:
+          // cancelled or unknown — show buttons
+          showButtons = true;
+          break;
+      }
     }
     header += '\n';
 
     const text = header + formatDayBlock(day, dayRecs);
 
-    // If already confirmed, no buttons
-    const buttons = confirmedRank != null ? [] : dayRecs.map(rec => ({
+    const buttons = showButtons ? dayRecs.map(rec => ({
       text: `Order #${rec.rank || 1}`,
       callbackData: `lo:${weekOf}:${abbrev}:${rec.rank || 1}`,
-    }));
+    })) : [];
 
     return { day, text, buttons };
   });

@@ -134,6 +134,29 @@ export function runMigrations(ctx) {
     CREATE INDEX IF NOT EXISTS idx_orders_week ON lunch_orders(week_of);
   `);
 
+  // ── Order attempts (audit trail) ────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS order_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      week_of TEXT NOT NULL,
+      day TEXT NOT NULL,
+      attempt_number INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL,
+      error_message TEXT,
+      screenshot_path TEXT,
+      started_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT,
+      duration_ms INTEGER
+    );
+  `);
+
+  // ── Add prompt_message_id column to lunch_orders (idempotent) ─────────
+  try {
+    db.prepare('SELECT prompt_message_id FROM lunch_orders LIMIT 1').get();
+  } catch {
+    db.exec('ALTER TABLE lunch_orders ADD COLUMN prompt_message_id TEXT');
+  }
+
   // ── Scrape log ──────────────────────────────────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS scrape_log (
@@ -145,6 +168,17 @@ export function runMigrations(ctx) {
       scraped_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // ── Startup recovery ──────────────────────────────────────────────────
+  // Recover stale 'placing' orders (crashed mid-placement)
+  db.prepare(`
+    UPDATE lunch_orders SET status = 'failed', error_message = 'Process crashed during placement'
+    WHERE status = 'placing' AND confirmed_at < datetime('now', '-5 minutes')
+  `).run();
+  // Clean up stale 'pending' orders (never confirmed/cancelled)
+  db.prepare(`
+    DELETE FROM lunch_orders WHERE status = 'pending' AND confirmed_at < datetime('now', '-24 hours')
+  `).run();
 }
 
 // ─── Menu helpers ───────────────────────────────────────────────────────────
@@ -190,7 +224,8 @@ export function getMenuForWeek(config, weekOf, day) {
 export function storeRecommendations(config, weekOf, recs) {
   const db = ensureDb(config);
   db.prepare('DELETE FROM lunch_recommendations WHERE week_of = ?').run(weekOf);
-  db.prepare('DELETE FROM lunch_orders WHERE week_of = ?').run(weekOf);
+  // Only delete non-active orders — preserve 'placing' and 'ordered'
+  db.prepare("DELETE FROM lunch_orders WHERE week_of = ? AND status NOT IN ('placing', 'ordered')").run(weekOf);
   const insert = db.prepare(`
     INSERT INTO lunch_recommendations
       (week_of, day, date, rank, item_name, restaurant, price,
@@ -296,6 +331,89 @@ export function getLunchOrdersForWeek(config, weekOf) {
 export function clearLunchOrders(config, weekOf) {
   const db = ensureDb(config);
   db.prepare('DELETE FROM lunch_orders WHERE week_of = ?').run(weekOf);
+}
+
+/**
+ * Create a pending order with prompt_message_id for two-tap confirmation.
+ */
+export function setPendingOrder(config, weekOf, day, rank, promptMessageId) {
+  const db = ensureDb(config);
+  const rec = db.prepare(
+    'SELECT * FROM lunch_recommendations WHERE week_of = ? AND day = ? AND rank = ?'
+  ).get(weekOf, day, rank);
+  if (!rec) return null;
+
+  db.prepare(`
+    INSERT OR REPLACE INTO lunch_orders
+      (week_of, day, rank, item_name, restaurant, price, combo_json, status, confirmed_at, prompt_message_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'), ?)
+  `).run(weekOf, day, rank, rec.item_name, rec.restaurant, rec.price, rec.combo_json, promptMessageId || null);
+
+  return db.prepare(
+    'SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?'
+  ).get(weekOf, day);
+}
+
+/**
+ * Transition order status. Sets ordered_at when status='ordered'.
+ */
+export function updateOrderStatus(config, weekOf, day, status, errorMessage) {
+  const db = ensureDb(config);
+  if (status === 'ordered') {
+    db.prepare(`
+      UPDATE lunch_orders SET status = ?, ordered_at = datetime('now'), error_message = NULL
+      WHERE week_of = ? AND day = ?
+    `).run(status, weekOf, day);
+  } else {
+    db.prepare(`
+      UPDATE lunch_orders SET status = ?, error_message = ?
+      WHERE week_of = ? AND day = ?
+    `).run(status, errorMessage || null, weekOf, day);
+  }
+}
+
+/**
+ * Delete a lunch order row (for cancel).
+ */
+export function deleteLunchOrder(config, weekOf, day) {
+  const db = ensureDb(config);
+  db.prepare('DELETE FROM lunch_orders WHERE week_of = ? AND day = ?').run(weekOf, day);
+}
+
+/**
+ * Get a single recommendation by week/day/rank.
+ */
+export function getRecommendation(config, weekOf, day, rank) {
+  const db = ensureDb(config);
+  return db.prepare(
+    'SELECT * FROM lunch_recommendations WHERE week_of = ? AND day = ? AND rank = ?'
+  ).get(weekOf, day, rank);
+}
+
+/**
+ * Log an order attempt for audit trail.
+ */
+export function logOrderAttempt(config, weekOf, day, attemptNumber, status, errorMessage, screenshotPath, durationMs) {
+  const db = ensureDb(config);
+  db.prepare(`
+    INSERT INTO order_attempts (week_of, day, attempt_number, status, error_message, screenshot_path, completed_at, duration_ms)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+  `).run(weekOf, day, attemptNumber || 1, status, errorMessage || null, screenshotPath || null, durationMs || null);
+}
+
+/**
+ * Compute the actual date for a given day within a week.
+ * weekOf='2026-05-12' + day='Wednesday' → '2026-05-14'
+ */
+export function computeDateForDay(weekOf, day) {
+  const dayOffsets = {
+    Monday: 0, Tuesday: 1, Wednesday: 2, Thursday: 3, Friday: 4,
+  };
+  const offset = dayOffsets[day];
+  if (offset == null) return null;
+  const monday = new Date(weekOf + 'T12:00:00');
+  monday.setDate(monday.getDate() + offset);
+  return monday.toISOString().slice(0, 10);
 }
 
 // ─── Week helpers ───────────────────────────────────────────────────────────

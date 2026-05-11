@@ -1,4 +1,4 @@
-import { confirmLunchOrder, getLunchOrder } from '../lib/db.js';
+import { getLunchOrder, setPendingOrder, getRecommendation, computeDateForDay } from '../lib/db.js';
 
 const DAY_MAP = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday' };
 
@@ -21,47 +21,77 @@ export default {
       return;
     }
 
-    // Check if already confirmed for this day
-    const existing = getLunchOrder(ctx.config, weekOf, day);
-    if (existing) {
-      await ctx.answerCallback(`Already confirmed for ${day}`);
-      return;
+    // Validate date is not in the past
+    const orderDate = computeDateForDay(weekOf, day);
+    if (orderDate) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (orderDate < today) {
+        await ctx.answerCallback(`Can't order for past date (${day})`);
+        return;
+      }
     }
 
-    // Confirm order (writes to DB)
-    const order = confirmLunchOrder(ctx.config, weekOf, day, rank);
-    if (!order) {
+    // Check existing order for this day
+    const existing = getLunchOrder(ctx.config, weekOf, day);
+    if (existing) {
+      if (existing.status === 'ordered') {
+        await ctx.answerCallback(`Already ordered for ${day}`);
+        return;
+      }
+      if (existing.status === 'placing') {
+        await ctx.answerCallback(`Order in progress for ${day}`);
+        return;
+      }
+      // pending or failed — allow re-selection (will overwrite via INSERT OR REPLACE)
+    }
+
+    // Look up recommendation
+    const rec = getRecommendation(ctx.config, weekOf, day, rank);
+    if (!rec) {
       await ctx.answerCallback('Recommendation not found');
       return;
     }
 
-    // Toast notification
-    await ctx.answerCallback(`Confirmed #${rank} for ${day}!`);
+    // Dismiss the button spinner immediately
+    await ctx.answerCallback();
 
-    // Send confirmation message with item details
-    // (Do NOT attempt adapter.edit — ctx.messageId is callback query ID, not message_id)
-    let confirmText = `✅ *Confirmed for ${day}:*\n`;
-
-    if (order.combo_json) {
+    // Build confirmation message
+    let confirmText = `*Confirm order for ${day}?*\n\n`;
+    if (rec.combo_json) {
       try {
-        const combo = JSON.parse(order.combo_json);
+        const combo = JSON.parse(rec.combo_json);
         if (Array.isArray(combo) && combo.length > 0) {
-          confirmText += `*${order.restaurant || 'Unknown'}*\n`;
+          confirmText += `*${rec.restaurant || 'Unknown'}*\n`;
           for (const item of combo) {
             const itemPrice = item.price ? ` — $${item.price.toFixed(2)}` : '';
             confirmText += `  • ${item.name}${itemPrice}\n`;
           }
-          confirmText += `Total: $${order.price?.toFixed(2) || '?'}`;
-          await ctx.adapter.send({ chatId: ctx.chatId, text: confirmText, parseMode: 'Markdown' });
-          return;
+          confirmText += `Total: $${rec.price?.toFixed(2) || '?'}`;
         }
-      } catch { /* fall through to single-item display */ }
+      } catch { /* fall through */ }
     }
 
-    const price = order.price ? ` — $${order.price.toFixed(2)}` : '';
-    confirmText += `*${order.item_name}*${price}`;
-    if (order.restaurant) confirmText += `\n_${order.restaurant}_`;
+    if (!confirmText.includes('•')) {
+      const price = rec.price ? ` — $${rec.price.toFixed(2)}` : '';
+      confirmText += `*${rec.item_name}*${price}`;
+      if (rec.restaurant) confirmText += `\n_${rec.restaurant}_`;
+    }
 
-    await ctx.adapter.send({ chatId: ctx.chatId, text: confirmText, parseMode: 'Markdown' });
+    // Send confirmation prompt with Confirm/Cancel buttons
+    const sent = await ctx.adapter.send({
+      chatId: ctx.chatId,
+      text: confirmText,
+      parseMode: 'Markdown',
+      inlineKeyboard: [[
+        { text: 'Confirm', callbackData: `lc:${weekOf}:${dayAbbrev}:${rank}` },
+        { text: 'Cancel', callbackData: `lx:${weekOf}:${dayAbbrev}:${rank}` },
+      ]],
+    });
+
+    // Store prompt message ID so we can edit it later
+    const promptMessageId = sent?.message_id || sent?.messageId || null;
+
+    // Create pending order in DB
+    setPendingOrder(ctx.config, weekOf, day, rank, promptMessageId ? String(promptMessageId) : null);
   },
 };

@@ -11,11 +11,10 @@
  */
 import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { acquireBrowserLock, releaseBrowserLock } from './browser-lock.js';
 
 const DEBUG_DIR = '/tmp/alfred-debug';
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-
-let _running = false;
 
 /**
  * Extract menu items from the currently visible .main-preview-menu on page.
@@ -89,18 +88,18 @@ async function extractMenuItems(page, restaurantName) {
  * Returns { weekOf: string, items: Array<{ day, name, restaurant, price, description, tags }> }
  */
 export async function scrapeMenu(log) {
-  if (_running) {
-    log?.warn('Scraper already running, skipping');
+  const acquired = await acquireBrowserLock(90_000);
+  if (!acquired) {
+    log?.warn('Browser lock busy (timeout), skipping scrape');
     return null;
   }
-  _running = true;
 
   const url = process.env.LUNCHDROP_URL || 'https://raleigh.lunchdrop.com';
   const email = process.env.LUNCHDROP_EMAIL;
   const password = process.env.LUNCHDROP_PASSWORD;
 
   if (!email || !password) {
-    _running = false;
+    releaseBrowserLock();
     throw new Error('LUNCHDROP_EMAIL and LUNCHDROP_PASSWORD must be set');
   }
 
@@ -293,6 +292,6 @@ export async function scrapeMenu(log) {
     if (browser) {
       try { await browser.close(); } catch { /* ignore */ }
     }
-    _running = false;
+    releaseBrowserLock();
   }
 }

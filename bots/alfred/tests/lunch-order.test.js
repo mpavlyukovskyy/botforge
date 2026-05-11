@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { formatRecommendationsWithButtons } from '../lib/formatter.js';
+import { acquireBrowserLock, releaseBrowserLock, _resetLock } from '../lib/browser-lock.js';
+import { computeDateForDay } from '../lib/db.js';
 
 // ── Inline DB helpers for testing (avoids singleton side-effects) ────────────
 
@@ -43,7 +45,21 @@ function setupTestDb() {
       confirmed_at TEXT DEFAULT (datetime('now')),
       ordered_at TEXT,
       error_message TEXT,
+      prompt_message_id TEXT,
       UNIQUE(week_of, day)
+    );
+
+    CREATE TABLE IF NOT EXISTS order_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      week_of TEXT NOT NULL,
+      day TEXT NOT NULL,
+      attempt_number INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL,
+      error_message TEXT,
+      screenshot_path TEXT,
+      started_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT,
+      duration_ms INTEGER
     );
   `);
 
@@ -62,6 +78,36 @@ function seedRecs(db, weekOf) {
   insert.run(weekOf, 'Tuesday', 2, 'Caesar Salad', 'FreshKitchen', 9.50, 7.0);
 }
 
+// ── computeDateForDay tests ─────────────────────────────────────────────────
+
+describe('computeDateForDay', () => {
+  it('Monday of 2026-05-12 returns 2026-05-12', () => {
+    expect(computeDateForDay('2026-05-12', 'Monday')).toBe('2026-05-12');
+  });
+
+  it('Wednesday of 2026-05-12 returns 2026-05-14', () => {
+    expect(computeDateForDay('2026-05-12', 'Wednesday')).toBe('2026-05-14');
+  });
+
+  it('Friday of 2026-05-12 returns 2026-05-16', () => {
+    expect(computeDateForDay('2026-05-12', 'Friday')).toBe('2026-05-16');
+  });
+
+  it('Tuesday of 2026-05-12 returns 2026-05-13', () => {
+    expect(computeDateForDay('2026-05-12', 'Tuesday')).toBe('2026-05-13');
+  });
+
+  it('Thursday of 2026-05-12 returns 2026-05-15', () => {
+    expect(computeDateForDay('2026-05-12', 'Thursday')).toBe('2026-05-15');
+  });
+
+  it('returns null for invalid day', () => {
+    expect(computeDateForDay('2026-05-12', 'Saturday')).toBeNull();
+    expect(computeDateForDay('2026-05-12', 'Sunday')).toBeNull();
+    expect(computeDateForDay('2026-05-12', 'Funday')).toBeNull();
+  });
+});
+
 // ── Callback data parsing ────────────────────────────────────────────────────
 
 describe('callback data parsing', () => {
@@ -71,22 +117,32 @@ describe('callback data parsing', () => {
     const parts = data.split(':');
     if (parts.length !== 4) return null;
     const [prefix, weekOf, dayAbbrev, rankStr] = parts;
-    if (prefix !== 'lo') return null;
+    if (!['lo', 'lc', 'lx'].includes(prefix)) return null;
     const day = DAY_MAP[dayAbbrev];
     const rank = parseInt(rankStr, 10);
     if (!day || isNaN(rank) || rank < 1) return null;
-    return { weekOf, day, rank };
+    return { prefix, weekOf, day, rank };
   }
 
-  it('parses valid 4-part format', () => {
+  it('parses valid lo: 4-part format', () => {
     const result = parseCallbackData('lo:2026-05-12:Mon:1');
-    expect(result).toEqual({ weekOf: '2026-05-12', day: 'Monday', rank: 1 });
+    expect(result).toEqual({ prefix: 'lo', weekOf: '2026-05-12', day: 'Monday', rank: 1 });
+  });
+
+  it('parses valid lc: confirm callback', () => {
+    const result = parseCallbackData('lc:2026-05-12:Wed:2');
+    expect(result).toEqual({ prefix: 'lc', weekOf: '2026-05-12', day: 'Wednesday', rank: 2 });
+  });
+
+  it('parses valid lx: cancel callback', () => {
+    const result = parseCallbackData('lx:2026-05-12:Fri:3');
+    expect(result).toEqual({ prefix: 'lx', weekOf: '2026-05-12', day: 'Friday', rank: 3 });
   });
 
   it('parses all day abbreviations', () => {
     for (const [abbrev, full] of Object.entries(DAY_MAP)) {
       const result = parseCallbackData(`lo:2026-05-12:${abbrev}:2`);
-      expect(result).toEqual({ weekOf: '2026-05-12', day: full, rank: 2 });
+      expect(result).toEqual({ prefix: 'lo', weekOf: '2026-05-12', day: full, rank: 2 });
     }
   });
 
@@ -108,15 +164,29 @@ describe('callback data parsing', () => {
     expect(parseCallbackData('lo')).toBeNull();
   });
 
-  it('callback data stays within 64-byte Telegram limit', () => {
+  it('returns null for unknown prefix', () => {
+    expect(parseCallbackData('zz:2026-05-12:Mon:1')).toBeNull();
+  });
+
+  it('lo: callback data stays within 64-byte Telegram limit', () => {
     const maxData = 'lo:2026-05-12:Wed:3';
+    expect(Buffer.byteLength(maxData, 'utf8')).toBeLessThanOrEqual(64);
+  });
+
+  it('lc: callback data stays within 64-byte Telegram limit', () => {
+    const maxData = 'lc:2026-05-12:Wed:3';
+    expect(Buffer.byteLength(maxData, 'utf8')).toBeLessThanOrEqual(64);
+  });
+
+  it('lx: callback data stays within 64-byte Telegram limit', () => {
+    const maxData = 'lx:2026-05-12:Wed:3';
     expect(Buffer.byteLength(maxData, 'utf8')).toBeLessThanOrEqual(64);
   });
 });
 
-// ── DB function tests ────────────────────────────────────────────────────────
+// ── DB state machine tests ──────────────────────────────────────────────────
 
-describe('lunch order DB functions', () => {
+describe('lunch order DB state machine', () => {
   let db;
   const weekOf = '2026-05-12';
 
@@ -125,23 +195,161 @@ describe('lunch order DB functions', () => {
     seedRecs(db, weekOf);
   });
 
-  it('confirmLunchOrder creates order from existing recommendation', () => {
+  it('setPendingOrder creates order with status=pending and prompt_message_id', () => {
     const rec = db.prepare(
       'SELECT * FROM lunch_recommendations WHERE week_of = ? AND day = ? AND rank = ?'
     ).get(weekOf, 'Monday', 1);
-    expect(rec).toBeDefined();
 
     db.prepare(`
       INSERT OR REPLACE INTO lunch_orders
-        (week_of, day, rank, item_name, restaurant, price, combo_json, status, confirmed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', datetime('now'))
-    `).run(weekOf, 'Monday', 1, rec.item_name, rec.restaurant, rec.price, rec.combo_json);
+        (week_of, day, rank, item_name, restaurant, price, combo_json, status, confirmed_at, prompt_message_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'), ?)
+    `).run(weekOf, 'Monday', 1, rec.item_name, rec.restaurant, rec.price, rec.combo_json, '12345');
 
     const order = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(order.status).toBe('pending');
+    expect(order.prompt_message_id).toBe('12345');
     expect(order.item_name).toBe('Grilled Chicken Bowl');
-    expect(order.restaurant).toBe('FreshKitchen');
-    expect(order.rank).toBe(1);
-    expect(order.status).toBe('confirmed');
+  });
+
+  it('updateOrderStatus transitions pending → placing → ordered (sets ordered_at)', () => {
+    // Create pending order
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'pending')
+    `).run(weekOf, 'Monday', 1, 'Test');
+
+    // Transition to placing
+    db.prepare("UPDATE lunch_orders SET status = 'placing' WHERE week_of = ? AND day = ?")
+      .run(weekOf, 'Monday');
+    let order = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(order.status).toBe('placing');
+
+    // Transition to ordered
+    db.prepare("UPDATE lunch_orders SET status = 'ordered', ordered_at = datetime('now') WHERE week_of = ? AND day = ?")
+      .run(weekOf, 'Monday');
+    order = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(order.status).toBe('ordered');
+    expect(order.ordered_at).not.toBeNull();
+  });
+
+  it('updateOrderStatus transitions pending → placing → failed (sets error_message)', () => {
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'pending')
+    `).run(weekOf, 'Monday', 1, 'Test');
+
+    db.prepare("UPDATE lunch_orders SET status = 'placing' WHERE week_of = ? AND day = ?")
+      .run(weekOf, 'Monday');
+
+    db.prepare("UPDATE lunch_orders SET status = 'failed', error_message = 'Timeout' WHERE week_of = ? AND day = ?")
+      .run(weekOf, 'Monday');
+
+    const order = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(order.status).toBe('failed');
+    expect(order.error_message).toBe('Timeout');
+  });
+
+  it('deleteLunchOrder removes row', () => {
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'pending')
+    `).run(weekOf, 'Monday', 1, 'Test');
+
+    db.prepare('DELETE FROM lunch_orders WHERE week_of = ? AND day = ?').run(weekOf, 'Monday');
+    const order = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(order).toBeUndefined();
+  });
+
+  it('UNIQUE(week_of, day) prevents having both pending and ordered for same day', () => {
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'ordered')
+    `).run(weekOf, 'Monday', 1, 'Ordered Item');
+
+    // INSERT OR REPLACE will overwrite — so only one row per day
+    db.prepare(`
+      INSERT OR REPLACE INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'pending')
+    `).run(weekOf, 'Monday', 2, 'New Pending');
+
+    const orders = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').all(weekOf, 'Monday');
+    expect(orders).toHaveLength(1);
+  });
+
+  it('stale placing orders recovered to failed on startup', () => {
+    // Insert a 'placing' order with old confirmed_at
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status, confirmed_at)
+      VALUES (?, ?, ?, ?, 'placing', datetime('now', '-10 minutes'))
+    `).run(weekOf, 'Monday', 1, 'Stale Order');
+
+    // Simulate startup recovery
+    db.prepare(`
+      UPDATE lunch_orders SET status = 'failed', error_message = 'Process crashed during placement'
+      WHERE status = 'placing' AND confirmed_at < datetime('now', '-5 minutes')
+    `).run();
+
+    const order = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(order.status).toBe('failed');
+    expect(order.error_message).toBe('Process crashed during placement');
+  });
+
+  it('stale pending orders cleaned up after 24h', () => {
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status, confirmed_at)
+      VALUES (?, ?, ?, ?, 'pending', datetime('now', '-25 hours'))
+    `).run(weekOf, 'Monday', 1, 'Old Pending');
+
+    db.prepare(`
+      DELETE FROM lunch_orders WHERE status = 'pending' AND confirmed_at < datetime('now', '-24 hours')
+    `).run();
+
+    const order = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(order).toBeUndefined();
+  });
+
+  it('storeRecommendations does NOT delete ordered or placing orders', () => {
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'ordered')
+    `).run(weekOf, 'Monday', 1, 'Ordered Item');
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'placing')
+    `).run(weekOf, 'Tuesday', 1, 'Placing Item');
+
+    // Simulate storeRecommendations with protected delete
+    db.prepare('DELETE FROM lunch_recommendations WHERE week_of = ?').run(weekOf);
+    db.prepare("DELETE FROM lunch_orders WHERE week_of = ? AND status NOT IN ('placing', 'ordered')").run(weekOf);
+
+    const orders = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? ORDER BY day').all(weekOf);
+    expect(orders).toHaveLength(2);
+    expect(orders[0].day).toBe('Monday');
+    expect(orders[0].status).toBe('ordered');
+    expect(orders[1].day).toBe('Tuesday');
+    expect(orders[1].status).toBe('placing');
+  });
+
+  it('storeRecommendations DOES delete pending, failed, cancelled orders', () => {
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'pending')
+    `).run(weekOf, 'Monday', 1, 'Pending Item');
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'failed')
+    `).run(weekOf, 'Tuesday', 1, 'Failed Item');
+    db.prepare(`
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'confirmed')
+    `).run(weekOf, 'Wednesday', 1, 'Confirmed Item');
+
+    db.prepare('DELETE FROM lunch_recommendations WHERE week_of = ?').run(weekOf);
+    db.prepare("DELETE FROM lunch_orders WHERE week_of = ? AND status NOT IN ('placing', 'ordered')").run(weekOf);
+
+    const orders = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ?').all(weekOf);
+    expect(orders).toHaveLength(0);
   });
 
   it('returns undefined for non-existent order', () => {
@@ -150,67 +358,76 @@ describe('lunch order DB functions', () => {
   });
 
   it('getLunchOrdersForWeek returns ordered results', () => {
-    // Insert orders for Monday and Tuesday
     db.prepare(`
-      INSERT INTO lunch_orders (week_of, day, rank, item_name, restaurant, price, status)
-      VALUES (?, ?, ?, ?, ?, ?, 'confirmed')
-    `).run(weekOf, 'Monday', 1, 'Grilled Chicken Bowl', 'FreshKitchen', 12.50);
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'confirmed')
+    `).run(weekOf, 'Monday', 1, 'Grilled Chicken Bowl');
     db.prepare(`
-      INSERT INTO lunch_orders (week_of, day, rank, item_name, restaurant, price, status)
-      VALUES (?, ?, ?, ?, ?, ?, 'confirmed')
-    `).run(weekOf, 'Tuesday', 1, 'Salmon Poke', 'OceanBowl', 15.00);
+      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
+      VALUES (?, ?, ?, ?, 'confirmed')
+    `).run(weekOf, 'Tuesday', 1, 'Salmon Poke');
 
     const orders = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? ORDER BY day').all(weekOf);
     expect(orders).toHaveLength(2);
     expect(orders[0].day).toBe('Monday');
     expect(orders[1].day).toBe('Tuesday');
   });
+});
 
-  it('clearLunchOrders removes all orders for a week', () => {
-    db.prepare(`
-      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
-      VALUES (?, ?, ?, ?, 'confirmed')
-    `).run(weekOf, 'Monday', 1, 'Test Item');
+// ── logOrderAttempt tests ───────────────────────────────────────────────────
 
-    db.prepare('DELETE FROM lunch_orders WHERE week_of = ?').run(weekOf);
-    const orders = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ?').all(weekOf);
-    expect(orders).toHaveLength(0);
+describe('logOrderAttempt', () => {
+  let db;
+  const weekOf = '2026-05-12';
+
+  beforeEach(() => {
+    db = setupTestDb();
   });
 
-  it('UNIQUE(week_of, day) constraint: second order replaces first', () => {
+  it('creates audit row with correct fields', () => {
     db.prepare(`
-      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
-      VALUES (?, ?, ?, ?, 'confirmed')
-    `).run(weekOf, 'Monday', 1, 'First Choice');
+      INSERT INTO order_attempts (week_of, day, attempt_number, status, error_message, screenshot_path, completed_at, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+    `).run(weekOf, 'Monday', 1, 'success', null, '/tmp/ss.png', 5000);
 
-    db.prepare(`
-      INSERT OR REPLACE INTO lunch_orders (week_of, day, rank, item_name, status)
-      VALUES (?, ?, ?, ?, 'confirmed')
-    `).run(weekOf, 'Monday', 2, 'Changed Mind');
-
-    const orders = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ? AND day = ?').all(weekOf, 'Monday');
-    expect(orders).toHaveLength(1);
-    expect(orders[0].rank).toBe(2);
-    expect(orders[0].item_name).toBe('Changed Mind');
+    const row = db.prepare('SELECT * FROM order_attempts WHERE week_of = ? AND day = ?').get(weekOf, 'Monday');
+    expect(row.status).toBe('success');
+    expect(row.attempt_number).toBe(1);
+    expect(row.screenshot_path).toBe('/tmp/ss.png');
+    expect(row.duration_ms).toBe(5000);
+    expect(row.error_message).toBeNull();
   });
 
-  it('storeRecommendations clears orders when re-storing', () => {
-    // Insert an order
+  it('multiple attempts for same day get separate rows', () => {
     db.prepare(`
-      INSERT INTO lunch_orders (week_of, day, rank, item_name, status)
-      VALUES (?, ?, ?, ?, 'confirmed')
-    `).run(weekOf, 'Monday', 1, 'Test');
+      INSERT INTO order_attempts (week_of, day, attempt_number, status, duration_ms)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(weekOf, 'Monday', 1, 'failed', 3000);
+    db.prepare(`
+      INSERT INTO order_attempts (week_of, day, attempt_number, status, duration_ms)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(weekOf, 'Monday', 2, 'success', 8000);
 
-    // Simulate storeRecommendations clearing orders
-    db.prepare('DELETE FROM lunch_recommendations WHERE week_of = ?').run(weekOf);
-    db.prepare('DELETE FROM lunch_orders WHERE week_of = ?').run(weekOf);
+    const rows = db.prepare('SELECT * FROM order_attempts WHERE week_of = ? AND day = ? ORDER BY attempt_number').all(weekOf, 'Monday');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].attempt_number).toBe(1);
+    expect(rows[0].status).toBe('failed');
+    expect(rows[1].attempt_number).toBe(2);
+    expect(rows[1].status).toBe('success');
+  });
 
-    const orders = db.prepare('SELECT * FROM lunch_orders WHERE week_of = ?').all(weekOf);
-    expect(orders).toHaveLength(0);
+  it('records error message for failed attempts', () => {
+    db.prepare(`
+      INSERT INTO order_attempts (week_of, day, attempt_number, status, error_message)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(weekOf, 'Tuesday', 1, 'failed', 'Checkout button not found');
+
+    const row = db.prepare('SELECT * FROM order_attempts WHERE week_of = ? AND day = ?').get(weekOf, 'Tuesday');
+    expect(row.error_message).toBe('Checkout button not found');
   });
 });
 
-// ── Formatter tests ──────────────────────────────────────────────────────────
+// ── Formatter tests with new statuses ───────────────────────────────────────
 
 describe('formatRecommendationsWithButtons', () => {
   const weekOf = '2026-05-12';
@@ -234,28 +451,55 @@ describe('formatRecommendationsWithButtons', () => {
     expect(monButtons).toHaveLength(2);
     expect(monButtons[0]).toEqual({ text: 'Order #1', callbackData: 'lo:2026-05-12:Mon:1' });
     expect(monButtons[1]).toEqual({ text: 'Order #2', callbackData: 'lo:2026-05-12:Mon:2' });
-
-    const tueButtons = result[1].buttons;
-    expect(tueButtons).toHaveLength(1);
-    expect(tueButtons[0]).toEqual({ text: 'Order #1', callbackData: 'lo:2026-05-12:Tue:1' });
   });
 
-  it('day with existing order shows CONFIRMED and empty buttons', () => {
+  // ── New status-based tests ────────────────────────────────────────────
+
+  it('ordered day shows [ORDERED] with no buttons', () => {
+    const existingOrders = new Map([['Monday', { rank: 1, status: 'ordered' }]]);
+    const result = formatRecommendationsWithButtons(recs, weekOf, existingOrders);
+
+    expect(result[0].text).toContain('[ORDERED]');
+    expect(result[0].buttons).toHaveLength(0);
+    expect(result[1].buttons).toHaveLength(1); // Tuesday still has buttons
+  });
+
+  it('placing day shows [PLACING...] with no buttons', () => {
+    const existingOrders = new Map([['Monday', { rank: 1, status: 'placing' }]]);
+    const result = formatRecommendationsWithButtons(recs, weekOf, existingOrders);
+
+    expect(result[0].text).toContain('[PLACING...]');
+    expect(result[0].buttons).toHaveLength(0);
+  });
+
+  it('pending day shows [PENDING CONFIRM] with no buttons', () => {
+    const existingOrders = new Map([['Monday', { rank: 1, status: 'pending' }]]);
+    const result = formatRecommendationsWithButtons(recs, weekOf, existingOrders);
+
+    expect(result[0].text).toContain('[PENDING CONFIRM]');
+    expect(result[0].buttons).toHaveLength(0);
+  });
+
+  it('failed day shows [FAILED] with buttons re-enabled', () => {
+    const existingOrders = new Map([['Monday', { rank: 1, status: 'failed' }]]);
+    const result = formatRecommendationsWithButtons(recs, weekOf, existingOrders);
+
+    expect(result[0].text).toContain('[FAILED]');
+    expect(result[0].buttons).toHaveLength(2); // buttons re-enabled
+  });
+
+  it('no order → buttons shown', () => {
+    const result = formatRecommendationsWithButtons(recs, weekOf);
+    expect(result[0].buttons).toHaveLength(2);
+    expect(result[1].buttons).toHaveLength(1);
+  });
+
+  it('backwards compatible with old format (just rank number)', () => {
     const existingOrders = new Map([['Monday', 1]]);
     const result = formatRecommendationsWithButtons(recs, weekOf, existingOrders);
 
     expect(result[0].text).toContain('[CONFIRMED #1]');
     expect(result[0].buttons).toHaveLength(0);
-
-    // Tuesday still has buttons
-    expect(result[1].buttons).toHaveLength(1);
-    expect(result[1].text).not.toContain('CONFIRMED');
-  });
-
-  it('day without order has buttons for each rank', () => {
-    const result = formatRecommendationsWithButtons(recs, weekOf);
-    expect(result[0].buttons).toHaveLength(2);
-    expect(result[1].buttons).toHaveLength(1);
   });
 
   it('empty recs returns empty array', () => {
@@ -268,5 +512,67 @@ describe('formatRecommendationsWithButtons', () => {
     expect(result[0].text).toContain('Grilled Chicken');
     expect(result[0].text).toContain('FreshKitchen');
     expect(result[0].text).toContain('$12.50');
+  });
+});
+
+// ── Browser lock tests ──────────────────────────────────────────────────────
+
+describe('browser lock', () => {
+  afterEach(() => {
+    _resetLock();
+  });
+
+  it('acquireBrowserLock returns true when unlocked', async () => {
+    const result = await acquireBrowserLock();
+    expect(result).toBe(true);
+  });
+
+  it('second call blocks until first releases', async () => {
+    await acquireBrowserLock();
+
+    let secondAcquired = false;
+    const secondPromise = acquireBrowserLock(5000).then((result) => {
+      secondAcquired = true;
+      return result;
+    });
+
+    // Second should still be waiting
+    await new Promise(r => setTimeout(r, 50));
+    expect(secondAcquired).toBe(false);
+
+    // Release first
+    releaseBrowserLock();
+
+    const result = await secondPromise;
+    expect(result).toBe(true);
+    expect(secondAcquired).toBe(true);
+  });
+
+  it('timeout returns false', async () => {
+    await acquireBrowserLock();
+
+    const result = await acquireBrowserLock(100);
+    expect(result).toBe(false);
+  });
+
+  it('releaseBrowserLock wakes queued caller', async () => {
+    await acquireBrowserLock();
+
+    const results = [];
+    const p1 = acquireBrowserLock(5000).then(r => results.push(r));
+    const p2 = acquireBrowserLock(5000).then(r => results.push(r));
+
+    await new Promise(r => setTimeout(r, 50));
+    releaseBrowserLock(); // wakes p1
+    await new Promise(r => setTimeout(r, 50));
+    releaseBrowserLock(); // wakes p2
+
+    await Promise.all([p1, p2]);
+    expect(results).toEqual([true, true]);
+  });
+
+  it('release when no queue just unlocks', () => {
+    // Should not throw
+    releaseBrowserLock();
   });
 });

@@ -4,9 +4,9 @@
  * Runs every Sunday at 6pm ET.
  * Pipeline: scrape LunchDrop → store menu → run 3-agent analysis → store recs → send to group.
  */
-import { ensureDb, storeMenuItems, storeRecommendations, logScrape, getCurrentWeekOf } from '../lib/db.js';
+import { ensureDb, storeMenuItems, storeRecommendations, logScrape, getCurrentWeekOf, getLunchOrdersForWeek } from '../lib/db.js';
 import { analyzeMenu } from '../lib/analysis.js';
-import { formatRecommendations } from '../lib/formatter.js';
+import { formatRecommendationsWithButtons } from '../lib/formatter.js';
 
 let _running = false;
 
@@ -86,15 +86,19 @@ export default {
         ctx.log.info(`lunch_scrape: stored ${recommendations.length} recommendations`);
       }
 
-      // ── Step 5: Send to group ─────────────────────────────────────────────
+      // ── Step 5: Send to group with order buttons ──────────────────────────
       if (groupChatId && recommendations.length > 0) {
-        const messages = formatRecommendations(recommendations, weekOf);
-        for (const text of messages) {
-          await ctx.adapter.send({
-            chatId: groupChatId,
-            text,
-            parseMode: 'Markdown',
-          });
+        const orders = getLunchOrdersForWeek(ctx.config, weekOf);
+        const existingOrders = new Map();
+        for (const o of orders) existingOrders.set(o.day, { rank: o.rank, status: o.status });
+
+        const dayMessages = formatRecommendationsWithButtons(recommendations, weekOf, existingOrders);
+        for (const dm of dayMessages) {
+          const msg = { chatId: groupChatId, text: dm.text, parseMode: 'Markdown' };
+          if (dm.buttons.length > 0) {
+            msg.inlineKeyboard = [dm.buttons];
+          }
+          await ctx.adapter.send(msg);
         }
 
         // Mark as sent

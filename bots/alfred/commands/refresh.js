@@ -16,7 +16,7 @@ import { formatRecommendationsWithButtons } from '../lib/formatter.js';
 async function sendRecsWithButtons(recs, weekOf, chatId, ctx) {
   const orders = getLunchOrdersForWeek(ctx.config, weekOf);
   const existingOrders = new Map();
-  for (const o of orders) existingOrders.set(o.day, o.rank);
+  for (const o of orders) existingOrders.set(o.day, { rank: o.rank, status: o.status });
 
   const dayMessages = formatRecommendationsWithButtons(recs, weekOf, existingOrders);
   for (const dm of dayMessages) {
