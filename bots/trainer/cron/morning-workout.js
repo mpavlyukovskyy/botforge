@@ -13,6 +13,10 @@ import {
   getRecentFeedback, getWeeklyAdjustment,
   getRecoveryRange, getAllExerciseTemplates,
 } from '../lib/db.js';
+
+export function formatWorkoutDate(date = new Date()) {
+  return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+}
 import { callSonnet } from '../lib/claude.js';
 import { getRecovery, parseRecoveryData } from '../lib/whoop-client.js';
 import { computeDeloadScore, computeRecoveryTrend } from '../lib/deload-detector.js';
@@ -103,6 +107,7 @@ export async function sendWorkoutPrompt(ctx, chatId, options = {}) {
 
   // Extract today's session from program
   const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  const dateStr = formatWorkoutDate();
   let programData;
   try {
     programData = JSON.parse(program.program_json);
@@ -131,7 +136,7 @@ export async function sendWorkoutPrompt(ctx, chatId, options = {}) {
     // Cron path: send rest day info and stop
     await ctx.adapter.send({
       chatId,
-      text: `*Rest day* (${dayName})\n\nNo training scheduled. Focus on recovery, mobility, or light cardio.`,
+      text: `*Rest day* — ${dateStr}\n\nNo training scheduled. Focus on recovery, mobility, or light cardio.`,
       parseMode: 'Markdown',
     });
     return;
@@ -140,7 +145,7 @@ export async function sendWorkoutPrompt(ctx, chatId, options = {}) {
   if (!session) {
     // Command on rest day: show recovery session with time buttons
     const card = [
-      `*Recovery Session* — ${dayName}`,
+      `*Recovery Session* — ${dateStr}`,
       recoverySummary,
       '',
       "Rest day on the program, but I'll build you a light session.",
@@ -174,6 +179,7 @@ export async function sendWorkoutPrompt(ctx, chatId, options = {}) {
 
   const card = [
     `${readinessEmoji} *${session.name}* — Week ${program.current_week}`,
+    dateStr,
     recoverySummary,
     adjustNote,
     '',
