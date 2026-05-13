@@ -10,7 +10,7 @@ import type { ZodType } from 'zod';
 
 /** MCP CallToolResult — defined locally to avoid @modelcontextprotocol/sdk dependency */
 type CallToolResult = {
-  content: Array<{ type: string; text: string }>;
+  content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
 };
 
