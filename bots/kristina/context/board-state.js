@@ -4,18 +4,29 @@
  * Injects current Atlas board state into LLM context.
  */
 import { getItems, getColumns } from '../lib/atlas-client.js';
-import { getRegisteredChat } from '../lib/db.js';
+import { getRegisteredChat, isAdmin } from '../lib/db.js';
 
 export default {
   type: 'board_state',
   async build(ctx) {
-    const registered = getRegisteredChat(ctx, ctx.chatId, ctx.userId);
-    const requester = registered?.requester_name;
-
     try {
       const columns = await getColumns(ctx);
       const items = await getItems(ctx, { status: 'OPEN' });
-      const filtered = items.filter(i => !i.requester || (requester && (i.requester === requester || i.assignee === requester)));
+
+      // Admin (Mark) sees the full board in context. Non-admins see only
+      // their own + unattributed. Without this bypass the brain sees a
+      // truncated board and reports e.g. 3/16 tasks as if they were the
+      // total — that was the 2026-05-18 post-cutover regression.
+      let filtered;
+      if (isAdmin(ctx)) {
+        filtered = items;
+      } else {
+        const registered = getRegisteredChat(ctx, ctx.chatId, ctx.userId);
+        const requester = registered?.requester_name;
+        filtered = items.filter(i =>
+          !i.requester || (requester && (i.requester === requester || i.assignee === requester))
+        );
+      }
 
       if (filtered.length === 0) return '<board_state>Board is empty.</board_state>';
 

@@ -1,16 +1,21 @@
 import { getItems, getColumns } from '../lib/atlas-client.js';
-import { getRegisteredChat, storeMessageRefs } from '../lib/db.js';
+import { getRegisteredChat, storeMessageRefs, isAdmin } from '../lib/db.js';
 
 export default {
   command: 'status',
   description: 'Show board overview grouped by column',
   async execute(args, ctx) {
-    const registered = getRegisteredChat(ctx, ctx.chatId, ctx.userId);
-    const requester = registered?.requester_name;
     const columns = await getColumns(ctx);
     const items = await getItems(ctx, { status: 'OPEN' });
 
-    const filtered = items.filter(i => !i.requester || (requester && (i.requester === requester || i.assignee === requester)));
+    let filtered;
+    if (isAdmin(ctx)) {
+      filtered = items;
+    } else {
+      const registered = getRegisteredChat(ctx, ctx.chatId, ctx.userId);
+      const requester = registered?.requester_name;
+      filtered = items.filter(i => !i.requester || (requester && (i.requester === requester || i.assignee === requester)));
+    }
 
     if (filtered.length === 0) {
       await ctx.adapter.send({ chatId: ctx.chatId, text: 'Board is empty.' });
