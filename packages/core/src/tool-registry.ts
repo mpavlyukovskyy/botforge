@@ -138,12 +138,38 @@ export class ToolRegistry {
       description: impl.description,
       schema: impl.schema,
       execute: async (args: unknown) => {
+        const startMs = Date.now();
         try {
           const effectiveCtx = impl.permissions ? sandboxContext(ctx, impl.permissions) : ctx;
           const result = await impl.execute(args, effectiveCtx);
+
+          // Log tool call to store accumulator
+          const toolLog = (ctx.store.get('_toolCallLog') as any[]) ?? [];
+          toolLog.push({
+            name: impl.name,
+            args: JSON.stringify(args).slice(0, 500),
+            resultLength: result.length,
+            durationMs: Date.now() - startMs,
+            error: false,
+          });
+          ctx.store.set('_toolCallLog', toolLog);
+
           return { content: [{ type: 'text', text: result }] };
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
+
+          // Log failed tool call
+          const toolLog = (ctx.store.get('_toolCallLog') as any[]) ?? [];
+          toolLog.push({
+            name: impl.name,
+            args: JSON.stringify(args).slice(0, 500),
+            resultLength: 0,
+            durationMs: Date.now() - startMs,
+            error: true,
+            errorMessage: errorMsg.slice(0, 200),
+          });
+          ctx.store.set('_toolCallLog', toolLog);
+
           return { content: [{ type: 'text', text: `Error: ${errorMsg}` }], isError: true };
         }
       },
@@ -166,7 +192,12 @@ export async function loadToolsFromDir(dir: string): Promise<ToolImplementation[
   }
 
   const toolFiles = files.filter(f =>
-    (f.endsWith('.js') || f.endsWith('.ts')) && !f.endsWith('.d.ts') && !f.endsWith('.test.ts')
+    (f.endsWith('.js') || f.endsWith('.ts')) &&
+    !f.endsWith('.d.ts') &&
+    !f.endsWith('.test.ts') &&
+    !f.endsWith('.test.js') &&
+    !f.endsWith('.spec.ts') &&
+    !f.endsWith('.spec.js')
   );
 
   const tools: ToolImplementation[] = [];
