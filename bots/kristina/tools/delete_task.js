@@ -1,13 +1,17 @@
 import { z } from 'zod';
 import { deleteItem, findTaskByIdPrefix, ensureDb } from '../lib/atlas-client.js';
+import { isAdmin } from '../lib/db.js';
 
 const deleteTask = {
   name: 'delete_task',
-  description: 'Delete a task from the board entirely.',
+  description: 'Delete a task from the board entirely. Mark only.',
   schema: {
     item_id: z.string().describe('Task ID to delete'),
   },
   execute: async (args, ctx) => {
+    if (!isAdmin(ctx)) {
+      return 'Only Mark can delete tasks. Ask him.';
+    }
     const db = ensureDb(ctx.config);
     const task = findTaskByIdPrefix(ctx, args.item_id);
     if (!task) return `No task found matching ID "${args.item_id}".`;

@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import { ensureDb, updateItem } from '../lib/atlas-client.js';
-import { findTaskByIdPrefix } from '../lib/db.js';
+import { findTaskByIdPrefix, isAdmin } from '../lib/db.js';
 
 /**
  * Cancel a task — sets status=ARCHIVED, earned_status=CANCELLED, current_value=0.
  *
  * Removes from the board WITHOUT affecting earnings (use delete_task to
- * remove entirely, or mark_done to credit it). Admin-only by convention.
+ * remove entirely, or mark_done to credit it). Admin-only.
  */
 const cancelTask = {
   name: 'cancel_task',
@@ -15,6 +15,9 @@ const cancelTask = {
     item_ids: z.array(z.string()).describe('Array of task IDs (or 8-char prefixes) to cancel'),
   },
   execute: async (args, ctx) => {
+    if (!isAdmin(ctx)) {
+      return 'Only Mark can cancel tasks. Ask him.';
+    }
     const db = ensureDb(ctx.config);
     const ids = args.item_ids || [];
     const results = [];

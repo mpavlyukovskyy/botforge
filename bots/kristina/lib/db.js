@@ -138,6 +138,22 @@ export function getCurrentBillingMonth() {
 }
 
 /**
+ * True if the caller is an admin per behavior.access.admin_users in YAML.
+ * Compares against BOTH userId and chatId — depending on platform/event
+ * shape one or the other carries Mark's 381823289 identifier.
+ *
+ * Admin status unlocks: full board visibility in query_board, cancel/delete,
+ * and changing deadlines on others' tasks.
+ */
+export function isAdmin(ctx) {
+  const adminUsers = ctx.config?.behavior?.access?.admin_users || [];
+  return (
+    adminUsers.includes(String(ctx.userId)) ||
+    adminUsers.includes(String(ctx.chatId))
+  );
+}
+
+/**
  * Look up a task by ID prefix (first 8 chars of UUID), checking both local
  * id and Atlas spok_id. Returns undefined if not found.
  */
