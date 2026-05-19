@@ -24,6 +24,21 @@ import { systemd } from './commands/systemd.js';
 import { build } from './commands/build.js';
 import { create } from './commands/create.js';
 
+// Crash handlers — ensure unhandled errors log loudly + force exit so systemd
+// restarts cleanly. Ported pattern from standalone kristina-bot. Without
+// these, certain async failures (especially in tool execute) leave the
+// process in a zombie state where polling continues but DB connections are
+// stale and no message gets a response.
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err?.stack || err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason instanceof Error ? reason.stack : reason);
+  process.exit(1);
+});
+
 const program = new Command();
 
 program

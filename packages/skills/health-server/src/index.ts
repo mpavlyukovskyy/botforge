@@ -2,16 +2,28 @@ import { createServer, type Server } from 'node:http';
 import type { Skill, SkillContext } from '@botforge/core';
 
 const LOG_BUFFER_SIZE = 1000;
+// Health-server default bind. 127.0.0.1 keeps the management/log endpoints off
+// the public network; the active probe runs on the same host (acemagic).
+// Override with HEALTH_BIND_ADDR=0.0.0.0 to expose via Tailscale interface.
+const DEFAULT_BIND = '127.0.0.1';
 
 export class HealthServerSkill implements Skill {
   readonly name = 'health-server';
   private server?: Server;
   private startTime = Date.now();
   private logBuffer: Array<{ timestamp: string; level: string; message: string }> = [];
+  private skills?: Map<string, Skill>;
+  private store?: Map<string, unknown>;
+
+  /** Called by runtime after BotInstance is created so /api/health can report liveness state */
+  setStore(store: Map<string, unknown>): void {
+    this.store = store;
+  }
 
   async init(ctx: SkillContext): Promise<void> {
     if (!ctx.config.health) return;
     this.startTime = Date.now();
+    this.skills = ctx.skills;
 
     const { port, path: healthPath, management_api } = ctx.config.health;
 
@@ -22,6 +34,9 @@ export class HealthServerSkill implements Skill {
 
       // Health endpoint
       if (req.method === 'GET' && url.pathname === healthPath) {
+        const lastError = this.store?.get('_lastError') as { at: number; class: string; ref: string } | undefined;
+        const lastMessageProcessedAt = this.store?.get('_lastMessageProcessedAt') as number | undefined;
+        const atlasCircuit = this.store?.get('_atlasCircuitState') as 'closed' | 'open' | undefined;
         const health = {
           status: 'healthy',
           botName: ctx.config.name,
@@ -30,9 +45,53 @@ export class HealthServerSkill implements Skill {
           version: ctx.config.version,
           platform: ctx.config.platform.type,
           brain: ctx.config.brain.provider,
+          last_message_processed_at: lastMessageProcessedAt
+            ? new Date(lastMessageProcessedAt).toISOString()
+            : null,
+          last_error_at: lastError ? new Date(lastError.at).toISOString() : null,
+          last_error_class: lastError?.class ?? null,
+          last_error_ref: lastError?.ref ?? null,
+          atlas_circuit_state: atlasCircuit ?? null,
         };
         res.writeHead(200);
         res.end(JSON.stringify(health));
+        return;
+      }
+
+      // Lightweight probe — no brain call, no auth. Used by external watchdog
+      // to verify the HTTP server is reachable AND the bot reports recent
+      // activity. Returns degraded if no message processed in `stale_threshold_s`
+      // OR if last interaction errored with usage_limit / auth.
+      if (req.method === 'GET' && url.pathname === '/api/probe') {
+        const lastError = this.store?.get('_lastError') as { at: number; class: string; ref: string } | undefined;
+        const lastMessageProcessedAt = this.store?.get('_lastMessageProcessedAt') as number | undefined;
+        const staleThresholdMs = parseInt(url.searchParams.get('stale_threshold_s') ?? '7200', 10) * 1000;
+        const now = Date.now();
+        let ok = true;
+        const failures: string[] = [];
+        if (lastError && (lastError.class === 'usage_limit' || lastError.class === 'auth')) {
+          // Hard block: a usage_limit/auth error means future brain calls will all fail
+          // until human intervention. Surface even if it happened long ago.
+          ok = false;
+          failures.push(`last_error=${lastError.class}`);
+        }
+        if (lastMessageProcessedAt && now - lastMessageProcessedAt > staleThresholdMs) {
+          ok = false;
+          failures.push(`no_message_in=${Math.floor((now - lastMessageProcessedAt) / 1000)}s`);
+        }
+        res.writeHead(ok ? 200 : 503);
+        res.end(JSON.stringify({
+          ok,
+          botName: ctx.config.name,
+          checked_at: new Date(now).toISOString(),
+          last_message_processed_at: lastMessageProcessedAt
+            ? new Date(lastMessageProcessedAt).toISOString()
+            : null,
+          last_error: lastError
+            ? { class: lastError.class, ref: lastError.ref, at: new Date(lastError.at).toISOString() }
+            : null,
+          failures,
+        }));
         return;
       }
 
@@ -86,6 +145,52 @@ export class HealthServerSkill implements Skill {
         return;
       }
 
+      // Interactions endpoint — query recent interactions from interaction-log skill
+      if (req.method === 'GET' && url.pathname === '/api/interactions') {
+        const iLog = this.skills?.get('interaction-log');
+        if (!iLog || !('getRecent' in iLog)) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'interaction-log skill not available' }));
+          return;
+        }
+        const limit = parseInt(url.searchParams.get('limit') ?? '50');
+        const bot = url.searchParams.get('bot') ?? undefined;
+        const rows = (iLog as any).getRecent(limit, bot);
+        res.writeHead(200);
+        res.end(JSON.stringify(rows));
+        return;
+      }
+
+      // Interaction stats endpoint
+      if (req.method === 'GET' && url.pathname === '/api/interactions/stats') {
+        const iLog = this.skills?.get('interaction-log');
+        if (!iLog || !('getStats' in iLog)) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'interaction-log skill not available' }));
+          return;
+        }
+        const days = parseInt(url.searchParams.get('days') ?? '7');
+        const stats = (iLog as any).getStats(days);
+        res.writeHead(200);
+        res.end(JSON.stringify(stats));
+        return;
+      }
+
+      // Cost-by-bot endpoint
+      if (req.method === 'GET' && url.pathname === '/api/costs') {
+        const tracker = this.skills?.get('token-tracker');
+        if (!tracker || !('getCostByBot' in tracker)) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'token-tracker skill not available' }));
+          return;
+        }
+        const days = parseInt(url.searchParams.get('days') ?? '30');
+        const costs = (tracker as any).getCostByBot(days);
+        res.writeHead(200);
+        res.end(JSON.stringify(costs));
+        return;
+      }
+
       // Restart endpoint
       if (req.method === 'POST' && url.pathname === '/api/restart') {
         res.writeHead(200);
@@ -98,9 +203,11 @@ export class HealthServerSkill implements Skill {
       res.end(JSON.stringify({ error: 'Not found' }));
     });
 
-    // Bind to localhost only
-    this.server.listen(port, '127.0.0.1', () => {
-      ctx.log.info(`Health server listening on http://127.0.0.1:${port}${healthPath}`);
+    // Bind. Default localhost; set HEALTH_BIND_ADDR=0.0.0.0 to expose on
+    // Tailscale interface for cross-host probes.
+    const bindAddr = process.env.HEALTH_BIND_ADDR || DEFAULT_BIND;
+    this.server.listen(port, bindAddr, () => {
+      ctx.log.info(`Health server listening on http://${bindAddr}:${port}${healthPath}`);
     });
   }
 

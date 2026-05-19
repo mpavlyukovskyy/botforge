@@ -15,6 +15,13 @@ import type {
   Logger,
 } from '@botforge/core';
 
+// Polling-error watchdog tuning. If we see >= MAX_ERRORS_PER_WINDOW polling
+// errors within ERROR_WINDOW_MS, we exit(1) so systemd restarts the process
+// with a fresh polling session. Counter resets on any successful message or
+// callback. Ported from standalone kristina-bot (resilience.test.ts covers).
+const ERROR_WINDOW_MS = 60_000;
+const MAX_ERRORS_PER_WINDOW = 15;
+
 export class TelegramAdapter implements PlatformAdapter {
   readonly platform = 'telegram';
   private bot: TelegramBot;
@@ -25,6 +32,14 @@ export class TelegramAdapter implements PlatformAdapter {
   private log: Logger;
   private dynamicChatIds = new Set<string>();
   private groupJoinHandler?: (chatId: string, title: string) => void;
+  private _pollingOffset = 0;
+  private pollingErrors: number[] = [];
+  private pollingHealthy = true;
+
+  /** Public getter used by health-server skill to report polling state */
+  isPollingHealthy(): boolean {
+    return this.pollingHealthy;
+  }
 
   constructor(botConfig: BotConfig, log: Logger) {
     const platform = botConfig.platform;
@@ -35,7 +50,7 @@ export class TelegramAdapter implements PlatformAdapter {
     this.log = log;
 
     const options: TelegramBot.ConstructorOptions = {
-      polling: this.config.mode === 'polling',
+      polling: false,
     };
 
     // If using local Bot API server
@@ -60,6 +75,10 @@ export class TelegramAdapter implements PlatformAdapter {
           return;
         }
       }
+
+      // Successful receive resets the polling-error sliding window
+      this.pollingErrors = [];
+      this.pollingHealthy = true;
 
       if (this.messageHandler) {
         try {
@@ -118,7 +137,22 @@ export class TelegramAdapter implements PlatformAdapter {
     });
 
     this.bot.on('polling_error', (err) => {
-      this.log.error(`Polling error: ${err.message}`);
+      const now = Date.now();
+      this.pollingErrors.push(now);
+      // Trim entries outside the sliding window
+      this.pollingErrors = this.pollingErrors.filter(t => now - t < ERROR_WINDOW_MS);
+      this.log.error(`Polling error (${this.pollingErrors.length} in last ${ERROR_WINDOW_MS / 1000}s): ${err.message}`);
+      if (this.pollingErrors.length >= MAX_ERRORS_PER_WINDOW) {
+        this.pollingHealthy = false;
+        this.log.error(`[FATAL] ${MAX_ERRORS_PER_WINDOW} polling errors in ${ERROR_WINDOW_MS / 1000}s — exiting for systemd restart`);
+        process.exit(1);
+      }
+    });
+
+    // Reset polling-error counter on successful callback receive too
+    this.bot.on('callback_query', () => {
+      this.pollingErrors = [];
+      this.pollingHealthy = true;
     });
 
     // Auto-detect group joins/removals
@@ -136,6 +170,29 @@ export class TelegramAdapter implements PlatformAdapter {
         this.dynamicChatIds.delete(String(chat.id));
       }
     });
+
+    // Track polling offset from every incoming update
+    const origProcess = this.bot.processUpdate.bind(this.bot);
+    this.bot.processUpdate = (update: TelegramBot.Update) => {
+      this._pollingOffset = update.update_id + 1;
+      origProcess(update);
+    };
+
+    // Start polling (moved from constructor to allow offset restoration)
+    if (this.config.mode === 'polling') {
+      // CRITICAL: TelegramBotPolling reads from bot.options.polling, NOT from
+      // startPolling() args. We must set bot.options.polling directly.
+      (this.bot as any).options.polling = {
+        params: {
+          offset: this._pollingOffset > 0 ? this._pollingOffset : 0,
+          allowed_updates: ['message', 'callback_query', 'my_chat_member', 'edited_message'],
+        },
+      };
+      if (this._pollingOffset > 0) {
+        this.log.info(`Polling from saved offset ${this._pollingOffset}`);
+      }
+      this.bot.startPolling();
+    }
 
     this.connected = true;
     this.log.info('Telegram adapter started (polling)');
@@ -282,6 +339,14 @@ export class TelegramAdapter implements PlatformAdapter {
   /** Get the underlying bot instance (for platform-specific operations) */
   getRawBot(): TelegramBot {
     return this.bot;
+  }
+
+  setPollingOffset(offset: number): void {
+    this._pollingOffset = offset;
+  }
+
+  getPollingOffset(): number {
+    return this._pollingOffset;
   }
 
   private convertMessage(msg: TelegramBot.Message): IncomingMessage | null {

@@ -17,12 +17,59 @@ import { ToolRegistry, loadToolsFromDir, type ToolContext } from './tool-registr
 import { loadModulesFromDir } from './module-loader.js';
 import { CommandRegistry, parseCommand, type ModuleContext, type CommandHandler } from './command-registry.js';
 import { CallbackRegistry, type CallbackActionHandler, type CallbackContext } from './callback-registry.js';
+import { randomUUID } from 'node:crypto';
 import { withChatLock } from './chat-lock.js';
 import { shouldAllow } from './rate-limiter.js';
 
 export type AdapterFactory = (config: BotConfig, log: Logger) => PlatformAdapter;
 export type SkillFactory = (name: string) => Promise<Skill>;
 export type MessageProcessor = (message: IncomingMessage, context: BotInstance) => Promise<void>;
+
+// ─── Structured error classification ────────────────────────────────────────
+
+export type ErrorClass =
+  | 'atlas_timeout'
+  | 'brain_timeout'
+  | 'tool_error'
+  | 'rate_limited'
+  | 'auth'
+  | 'usage_limit'
+  | 'unknown';
+
+/**
+ * Classify a thrown error into a stable category for logging, metrics, and
+ * user-facing incident codes. Order matters — check most specific first.
+ */
+export function classifyError(err: unknown): ErrorClass {
+  if (!err) return 'unknown';
+  const msg = err instanceof Error ? err.message : String(err);
+  const name = err instanceof Error ? err.name : '';
+
+  // Anthropic spending cap (workspace usage limit)
+  if (/specified API usage limits/i.test(msg) || /usage limit/i.test(msg)) return 'usage_limit';
+  if (/\b(429|529)\b/.test(msg) || /rate.?limit/i.test(msg)) return 'rate_limited';
+  if (/\b401\b/.test(msg) || /authentication|invalid api key|unauthorized/i.test(msg)) return 'auth';
+  if (name === 'AbortError' || /This operation was aborted/i.test(msg)) return 'atlas_timeout';
+  if (/timed out/i.test(msg) || /timeout/i.test(msg)) return 'brain_timeout';
+  if (/tool|MCP/i.test(msg)) return 'tool_error';
+  return 'unknown';
+}
+
+/**
+ * Render a user-facing structured error string. Includes errorClass, ISO
+ * timestamp, and a short ref so the user can quote it back and we can
+ * grep journals + interaction_log.
+ */
+export function renderStructuredError(opts: {
+  errorClass: ErrorClass;
+  incidentId: string;
+  timestamp?: Date;
+}): string {
+  const ts = (opts.timestamp ?? new Date()).toISOString();
+  // Use first 8 chars of UUID as a human-shareable ref
+  const ref = opts.incidentId.replace(/-/g, '').slice(0, 8);
+  return `⚠️ Failed to process (${opts.errorClass} @ ${ts}, ref ${ref}). Logged for review.`;
+}
 
 /** Lifecycle hook loaded from bot directory */
 export interface LifecycleHook {
@@ -92,6 +139,7 @@ const SKILL_INIT_ORDER = [
   'conversation-history',
   'event-bus',
   'token-tracker',
+  'interaction-log',
   'context-builder',
   'circuit-breaker',
   'response-formatter',
@@ -108,6 +156,7 @@ function detectSkills(config: BotConfig): string[] {
 
   if (config.memory?.conversation_history?.enabled) detected.add('conversation-history');
   if (config.brain?.provider === 'claude' || config.brain?.provider === 'claude-cli') detected.add('token-tracker');
+  if (config.brain?.provider) detected.add('interaction-log');
   if (config.memory?.context_blocks?.length) detected.add('context-builder');
   if (config.resilience?.circuit_breaker) detected.add('circuit-breaker');
   if (config.behavior?.reception?.keywords?.length
@@ -328,6 +377,11 @@ function createBrainProcessor(
     // Clear any previous post-response actions
     inst.store.delete('postResponse');
 
+    // Interaction log instrumentation
+    const correlationId = randomUUID();
+    const startTime = Date.now();
+    inst.store.set('_toolCallLog', []);
+
     // Build userMessage with file metadata for document attachments
     let userMessage = message.text ?? '';
     if (message.type === 'document' && files?.length) {
@@ -360,6 +414,15 @@ function createBrainProcessor(
     }
     if (!userMessage) userMessage = '[media message]';
     log.info(`UserMessage (${userMessage.length} chars): ${userMessage.slice(0, 200)}`);
+
+    // Compute system prompt length for logging
+    const systemPromptLength = systemPrompt.length
+      + (conversationHistory?.length ?? 0)
+      + contextBlocks.reduce((s, b) => s + b.length, 0);
+
+    let interactionStatus: 'success' | 'error' | 'timeout' = 'success';
+    let interactionError: string | null = null;
+    let interactionErrorClass: ErrorClass | null = null;
 
     try {
       if (config.brain.provider === 'claude') {
@@ -435,8 +498,17 @@ function createBrainProcessor(
         responseText = 'Unsupported brain provider.';
       }
     } catch (err) {
-      log.error(`Brain error: ${err}`);
-      responseText = "Sorry, I couldn't process that. Please try again.";
+      const errorClass = classifyError(err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errStack = err instanceof Error ? err.stack : undefined;
+      log.error(`Brain error [class=${errorClass} ref=${correlationId.slice(0, 8)}]: ${errMsg}`);
+      if (errStack) log.debug(errStack);
+      responseText = renderStructuredError({ errorClass, incidentId: correlationId });
+      interactionStatus = errMsg.includes('timed out') ? 'timeout' : 'error';
+      interactionError = errMsg;
+      interactionErrorClass = errorClass;
+      // Surface to shared store for health endpoint
+      inst.store.set('_lastError', { at: Date.now(), class: errorClass, ref: correlationId.slice(0, 8) });
     }
 
     // Send response (via response-formatter if available)
@@ -486,7 +558,47 @@ function createBrainProcessor(
       await (tokenTracker as any).recordUsage(
         config.brain.model,
         brainResponse.usage.costUsd,
+        config.name,
       );
+    }
+
+    // Record interaction log
+    const interactionLog = inst.skills.get('interaction-log');
+    if (interactionLog && 'record' in interactionLog) {
+      try {
+        const toolCallLog = (inst.store.get('_toolCallLog') as any[]) ?? [];
+        (interactionLog as any).record({
+          id: correlationId,
+          botName: config.name,
+          chatId: message.chatId,
+          userId: message.userId,
+          provider: config.brain.provider,
+          model: config.brain.model,
+          systemPromptLength,
+          contextBlockTags: contextBlocks.map(b => {
+            const match = b.match(/^<(\w+)/);
+            return match?.[1] ?? 'unknown';
+          }),
+          userMessage: userMessage.slice(0, 2000),
+          toolCalls: toolCallLog,
+          brainTurns: brainResponse?.turns ?? 0,
+          latencyMs: Date.now() - startTime,
+          responseText: responseText?.slice(0, 5000),
+          responseLength: responseText?.length ?? 0,
+          costUsd: brainResponse?.usage?.costUsd ?? null,
+          status: interactionStatus,
+          errorMessage: interactionError,
+          errorClass: interactionErrorClass,
+        });
+      } catch (err) {
+        log.warn(`Failed to record interaction: ${err}`);
+      }
+      inst.store.delete('_toolCallLog');
+    }
+
+    // Track liveness for health endpoint (success path only; errors set _lastError above)
+    if (interactionStatus === 'success') {
+      inst.store.set('_lastMessageProcessedAt', Date.now());
     }
   };
 }
@@ -610,6 +722,16 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
         log.warn(`Failed to load skill "${name}": ${err}`);
       }
     }
+  }
+
+  // 11b. Wire health-server's view of the bot's shared store. The store is
+  // populated by the message processor (_lastError, _lastMessageProcessedAt)
+  // and by atlas-client (_atlasCircuitState) and is what /api/health and
+  // /api/probe report from. Must happen before skill.init() so /api/health
+  // responses are populated from the very first request.
+  const healthServer = skills.get('health-server');
+  if (healthServer && 'setStore' in healthServer) {
+    (healthServer as any).setStore(store);
   }
 
   // 12. Register cron handlers with cron-scheduler skill BEFORE skill init
@@ -873,11 +995,17 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
         try {
           await instance.processMessage(message, instance);
         } catch (err) {
-          log.error(`Error processing message: ${err}`);
+          const errorClass = classifyError(err);
+          const incidentId = randomUUID();
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const errStack = err instanceof Error ? err.stack : undefined;
+          log.error(`Error processing message [class=${errorClass} ref=${incidentId.slice(0, 8)}]: ${errMsg}`);
+          if (errStack) log.debug(errStack);
+          instance.store.set('_lastError', { at: Date.now(), class: errorClass, ref: incidentId.slice(0, 8) });
           try {
             await adapter.send({
               chatId: message.chatId,
-              text: "Sorry, I couldn't process that. Please try again.",
+              text: renderStructuredError({ errorClass, incidentId }),
             });
           } catch {
             // Ignore send failure
