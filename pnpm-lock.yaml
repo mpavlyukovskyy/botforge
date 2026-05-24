@@ -82,6 +82,9 @@ importers:
       '@botforge/core':
         specifier: workspace:*
         version: link:../core
+      '@botforge/skill-backup':
+        specifier: workspace:*
+        version: link:../skills/backup
       '@botforge/skill-circuit-breaker':
         specifier: workspace:*
         version: link:../skills/circuit-breaker
@@ -106,6 +109,9 @@ importers:
       '@botforge/skill-health-server':
         specifier: workspace:*
         version: link:../skills/health-server
+      '@botforge/skill-heartbeat':
+        specifier: workspace:*
+        version: link:../skills/heartbeat
       '@botforge/skill-passive-detection':
         specifier: workspace:*
         version: link:../skills/passive-detection
@@ -130,6 +136,9 @@ importers:
       '@botforge/skill-tool-server':
         specifier: workspace:*
         version: link:../skills/tool-server
+      '@botforge/skill-workspace-monitor':
+        specifier: workspace:*
+        version: link:../skills/workspace-monitor
       '@botforge/storage-sqlite':
         specifier: workspace:*
         version: link:../storage/sqlite
@@ -231,6 +240,25 @@ importers:
         version: 4.2.2
       typescript:
         specifier: ^5
+        version: 5.9.3
+
+  packages/skills/backup:
+    dependencies:
+      '@botforge/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.0
         version: 5.9.3
 
   packages/skills/circuit-breaker:
@@ -373,6 +401,25 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/skills/heartbeat:
+    dependencies:
+      '@botforge/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   packages/skills/passive-detection:
     dependencies:
       '@botforge/core':
@@ -509,6 +556,25 @@ importers:
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/skills/workspace-monitor:
+    dependencies:
+      '@botforge/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

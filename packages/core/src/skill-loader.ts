@@ -32,6 +32,9 @@ export const SKILL_INIT_ORDER = [
   'daily-digest',
   'health-server',
   'tool-server',
+  'heartbeat',
+  'backup',
+  'workspace-monitor',
 ] as const;
 
 export type KnownSkillName = (typeof SKILL_INIT_ORDER)[number];
@@ -63,6 +66,27 @@ export function detectSkills(config: BotConfig): string[] {
   const dlqCfg = (config as any).dlq;
   if (dlqCfg?.enabled !== false) {
     detected.add('dlq');
+  }
+
+  // Heartbeat opt-in: only if heartbeat URLs are configured.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hbCfg = (config.health as any)?.heartbeat;
+  if (hbCfg?.poll_url || hbCfg?.cron_urls) {
+    detected.add('heartbeat');
+  }
+
+  // Backup opt-in: backup.enabled: true.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bkCfg = (config as any).backup;
+  if (bkCfg?.enabled === true) {
+    detected.add('backup');
+  }
+
+  // Workspace monitor opt-in.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wmCfg = (config as any).workspace_monitor;
+  if (wmCfg?.enabled === true) {
+    detected.add('workspace-monitor');
   }
 
   if (config.memory?.conversation_history?.enabled) detected.add('conversation-history');
