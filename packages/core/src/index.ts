@@ -21,6 +21,7 @@ export { withChatLock } from './chat-lock.js';
 export { shouldAllow } from './rate-limiter.js';
 export { setRef, getRef, extractRefs, expandRefs, clearRefs } from './numbered-refs.js';
 export { getFrameworkSha, _resetFrameworkShaCache } from './framework-info.js';
+export { STORE_KEYS, storeAccess, type BotStore, type PostResponseHint } from './bot-store.js';
 
 // Adapter types
 export type {

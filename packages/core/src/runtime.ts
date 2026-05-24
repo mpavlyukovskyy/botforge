@@ -19,6 +19,7 @@ import { CommandRegistry, parseCommand, type ModuleContext, type CommandHandler 
 import { CallbackRegistry, type CallbackActionHandler, type CallbackContext } from './callback-registry.js';
 import { withChatLock } from './chat-lock.js';
 import { shouldAllow } from './rate-limiter.js';
+import { STORE_KEYS, storeAccess, type BotStore } from './bot-store.js';
 
 export type AdapterFactory = (config: BotConfig, log: Logger) => PlatformAdapter;
 export type SkillFactory = (name: string) => Promise<Skill>;
@@ -52,7 +53,7 @@ export interface BotInstance {
   commandRegistry: CommandRegistry;
   callbackRegistry: CallbackRegistry;
   /** Shared key-value store for cross-module state */
-  store: Map<string, unknown>;
+  store: BotStore;
   /** Process an incoming message through the brain */
   processMessage?: MessageProcessor;
   /** Bot's Telegram username (auto-detected or from config) */
@@ -326,7 +327,7 @@ function createBrainProcessor(
     let brainResponse: BrainResponse | undefined;
 
     // Clear any previous post-response actions
-    inst.store.delete('postResponse');
+    storeAccess.clearPostResponse(inst.store);
 
     // Build userMessage with file metadata for document attachments
     let userMessage = message.text ?? '';
@@ -454,7 +455,7 @@ function createBrainProcessor(
     }
 
     // Post-response hook: attach inline keyboards from tool results
-    const postResponse = inst.store.get('postResponse') as { buttons?: any[][] } | undefined;
+    const postResponse = storeAccess.postResponse(inst.store);
     if (postResponse?.buttons && sentMessageId && inst.adapter.edit) {
       try {
         await inst.adapter.edit(sentMessageId, message.chatId, {
@@ -464,7 +465,7 @@ function createBrainProcessor(
       } catch (err) {
         log.warn(`Post-response edit failed: ${err}`);
       }
-      inst.store.delete('postResponse');
+      storeAccess.clearPostResponse(inst.store);
     }
 
     // Store conversation in history (if skill available)
@@ -527,7 +528,7 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
   }
 
   // 4. Create shared store
-  const store = new Map<string, unknown>();
+  const store: BotStore = new Map<string, unknown>();
 
   // 5. Load tool registry
   const toolRegistry = new ToolRegistry();
@@ -541,7 +542,7 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
   }
 
   // 5a. Store toolRegistry in shared store (for tool-server and other skills)
-  store.set('toolRegistry', toolRegistry);
+  store.set(STORE_KEYS.TOOL_REGISTRY, toolRegistry);
 
   // 6. Load command handlers from bot directory
   const commandRegistry = new CommandRegistry();
@@ -684,7 +685,7 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
   if (eventBusSkill && 'getBus' in eventBusSkill) {
     const bus = (eventBusSkill as any).getBus();
     if (bus) {
-      store.set('eventBus', bus);
+      store.set(STORE_KEYS.EVENT_BUS, bus);
       log.info('Event bus stored in instance store');
     }
   }

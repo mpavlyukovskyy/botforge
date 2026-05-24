@@ -25,7 +25,7 @@ export interface SkillContext {
   /** Reference to other loaded skills */
   skills: Map<string, Skill>;
   /** Shared key-value store for cross-module state */
-  store?: Map<string, unknown>;
+  store?: import('./bot-store.js').BotStore;
 }
 
 export interface Skill {
