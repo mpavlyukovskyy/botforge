@@ -14,8 +14,9 @@ import { Command } from 'commander';
 import { loadConfig } from '@botforge/core';
 import { startBot } from '@botforge/core';
 import { createTelegramAdapter } from '@botforge/adapter-telegram';
+import { SqliteStorage } from '@botforge/storage-sqlite';
 import { resolve, dirname, join } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { deploy } from './commands/deploy.js';
 import { rollback } from './commands/rollback.js';
 import { status } from './commands/status.js';
@@ -70,6 +71,19 @@ program
         return;
       }
 
+      // T3.6: open a shared SQLite handle so skills like cron-scheduler that
+      // need persistence (ctx.db) get one. Skills that own their own DB
+      // (token-tracker, conversation-history) continue to use SqliteStorage
+      // directly against the same file — SQLite WAL handles concurrent
+      // connections cleanly.
+      const config = loadConfig(absPath);
+      mkdirSync('data', { recursive: true });
+      const sharedStorage = new SqliteStorage({
+        path: `data/${config.name}.db`,
+        migrations: [],
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+      });
+
       const instance = await startBot(absPath, {
         createAdapter: (config, log) => {
           switch (config.platform.type) {
@@ -82,6 +96,7 @@ program
         loadSkill,
         toolsDir,
         echo: opts.echo,
+        db: sharedStorage.db as any,
       });
 
       console.log(`Bot "${instance.config.name}" is running. Press Ctrl+C to stop.`);

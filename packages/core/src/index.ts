@@ -78,12 +78,8 @@ export type {
   CronJob,
   Health,
   ToolServer,
-  Communication,
-  Subscription,
   Behavior,
   Reception,
   MessageTypes,
-  Pipeline,
-  PipelineStep,
   ToolDefinition,
 } from './schema.js';
