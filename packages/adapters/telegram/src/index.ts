@@ -4,15 +4,17 @@
 
 import TelegramBot from 'node-telegram-bot-api';
 import { readFileSync } from 'fs';
-import type {
-  PlatformAdapter,
-  IncomingMessage,
-  OutgoingMessage,
-  MessageHandler,
-  CallbackHandler,
-  BotConfig,
-  TelegramPlatform,
-  Logger,
+import {
+  mintTelegramRequestId,
+  runWithRequestContext,
+  type PlatformAdapter,
+  type IncomingMessage,
+  type OutgoingMessage,
+  type MessageHandler,
+  type CallbackHandler,
+  type BotConfig,
+  type TelegramPlatform,
+  type Logger,
 } from '@botforge/core';
 import {
   createState,
@@ -145,13 +147,19 @@ export class TelegramAdapter implements PlatformAdapter {
       }
 
       if (this.messageHandler) {
-        try {
-          await this.messageHandler(incoming);
-          if (updateId !== undefined) this.inbox?.markDone(updateId);
-        } catch (err) {
-          this.log.error(`Message handler error: ${err}`);
-          if (updateId !== undefined) this.inbox?.markFailed(updateId, String(err));
-        }
+        const requestId = mintTelegramRequestId(incoming.chatId, updateId ?? msg.message_id);
+        await runWithRequestContext(
+          { request_id: requestId, chat_id: incoming.chatId, user_id: incoming.userId },
+          async () => {
+            try {
+              await this.messageHandler!(incoming);
+              if (updateId !== undefined) this.inbox?.markDone(updateId);
+            } catch (err) {
+              this.log.error(`Message handler error: ${err}`);
+              if (updateId !== undefined) this.inbox?.markFailed(updateId, String(err));
+            }
+          },
+        );
       } else if (updateId !== undefined) {
         // No handler — there's nothing more we can do; treat as done so the
         // inbox doesn't retry forever.
@@ -198,12 +206,18 @@ export class TelegramAdapter implements PlatformAdapter {
 
       let handlerError: unknown;
       if (this.callbackHandler) {
-        try {
-          await this.callbackHandler(incoming);
-        } catch (err) {
-          this.log.error(`Callback handler error: ${err}`);
-          handlerError = err;
-        }
+        const requestId = mintTelegramRequestId(incoming.chatId, updateId ?? query.id);
+        await runWithRequestContext(
+          { request_id: requestId, chat_id: incoming.chatId, user_id: incoming.userId },
+          async () => {
+            try {
+              await this.callbackHandler!(incoming);
+            } catch (err) {
+              this.log.error(`Callback handler error: ${err}`);
+              handlerError = err;
+            }
+          },
+        );
       }
 
       clearTimeout(fallbackTimer);

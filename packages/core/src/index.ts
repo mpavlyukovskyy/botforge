@@ -1,7 +1,17 @@
 // Core exports
 export { loadConfig, validateConfig, type LoadConfigOptions } from './config.js';
 export { startBot, type BotInstance, type BotForgeOptions, type AdapterFactory, type SkillFactory, type MessageProcessor, type LifecycleHook, type ContextBuilder, type CronHandler } from './runtime.js';
-export { createLogger, type Skill, type SkillContext, type Logger, type DatabaseLike } from './skill.js';
+export {
+  createLogger,
+  runWithRequestContext,
+  getRequestContext,
+  mintTelegramRequestId,
+  type Skill,
+  type SkillContext,
+  type Logger,
+  type DatabaseLike,
+  type RequestContext,
+} from './skill.js';
 
 // Brain
 export { askBrain, type BrainTool, type BrainConfig, type BrainInput, type BrainResponse } from './brain.js';
