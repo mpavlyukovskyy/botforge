@@ -149,6 +149,13 @@ const CronJobSchema = z.object({
   cron: z.string().describe('Cron expression (5 or 6 fields)'),
   timezone: z.string().default('UTC'),
   handler: z.string().optional().describe('Handler function name'),
+  /**
+   * When true, if the process crashed mid-handler the cron-scheduler skill
+   * will re-invoke the handler on next startup. Default false — most cron
+   * handlers send user-visible messages and a replay would duplicate them.
+   * Opt in per job only for handlers known to be idempotent.
+   */
+  replay_on_crash: z.boolean().default(false),
 });
 
 const ScheduleSchema = z.object({

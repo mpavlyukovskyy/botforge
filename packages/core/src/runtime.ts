@@ -642,6 +642,18 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     }
   }
 
+  // 15a. Now that start hooks have run, replay any in_flight crons that
+  //      opted in via YAML's replay_on_crash. Deferred until here so the
+  //      handlers see fully-initialized lifecycle state.
+  const cronSchedulerForReplay = skills.get('cron-scheduler');
+  if (cronSchedulerForReplay && 'runDeferredReplays' in cronSchedulerForReplay) {
+    try {
+      await (cronSchedulerForReplay as unknown as { runDeferredReplays(): Promise<void> }).runDeferredReplays();
+    } catch (err) {
+      log.error(`Cron deferred replay failed: ${err}`);
+    }
+  }
+
   // 16. Determine message processor
   if (options.messageProcessor) {
     instance.processMessage = options.messageProcessor;
