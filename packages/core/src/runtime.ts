@@ -20,6 +20,7 @@ import { CallbackRegistry, type CallbackActionHandler, type CallbackContext } fr
 import { withChatLock } from './chat-lock.js';
 import { shouldAllow } from './rate-limiter.js';
 import { STORE_KEYS, storeAccess, type BotStore } from './bot-store.js';
+import { loadSkills, initSkills } from './skill-loader.js';
 
 export type AdapterFactory = (config: BotConfig, log: Logger) => PlatformAdapter;
 export type SkillFactory = (name: string) => Promise<Skill>;
@@ -85,47 +86,6 @@ export interface BotForgeOptions {
   toolsDir?: string;
   /** Force echo mode — don't use brain, just echo messages */
   echo?: boolean;
-}
-
-// ─── Skill auto-detection ───────────────────────────────────────────────────
-
-const SKILL_INIT_ORDER = [
-  'conversation-history',
-  'event-bus',
-  'token-tracker',
-  'context-builder',
-  'circuit-breaker',
-  'response-formatter',
-  'reply-context',
-  'pending-questions',
-  'cron-scheduler',
-  'daily-digest',
-  'health-server',
-  'tool-server',
-] as const;
-
-function detectSkills(config: BotConfig): string[] {
-  const detected = new Set<string>();
-
-  if (config.memory?.conversation_history?.enabled) detected.add('conversation-history');
-  if (config.brain?.provider === 'claude' || config.brain?.provider === 'claude-cli') detected.add('token-tracker');
-  if (config.memory?.context_blocks?.length) detected.add('context-builder');
-  if (config.resilience?.circuit_breaker) detected.add('circuit-breaker');
-  if (config.behavior?.reception?.keywords?.length
-      || config.behavior?.reception?.patterns?.length) {
-    detected.add('passive-detection');
-  }
-  if (config.behavior?.response) detected.add('response-formatter');
-  if (config.behavior?.continuity?.reply_context) detected.add('reply-context');
-  if (config.behavior?.continuity?.pending_questions) detected.add('pending-questions');
-  if (config.schedule) detected.add('cron-scheduler');
-  if (config.schedule) detected.add('event-bus');
-  if (config.schedule?.daily_digest) detected.add('daily-digest');
-  if (config.health) detected.add('health-server');
-  if (config.tool_server) detected.add('tool-server');
-
-  // Return in init order
-  return SKILL_INIT_ORDER.filter(name => detected.has(name));
 }
 
 // ─── Bot directory derivation ───────────────────────────────────────────────
@@ -596,22 +556,8 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     }
   }
 
-  // 11. Load skills
-  const skills = new Map<string, Skill>();
-
-  if (options.loadSkill) {
-    const skillNames = detectSkills(config);
-
-    for (const name of skillNames) {
-      try {
-        const skill = await options.loadSkill(name);
-        skills.set(name, skill);
-        log.info(`Loaded skill: ${name}`);
-      } catch (err) {
-        log.warn(`Failed to load skill "${name}": ${err}`);
-      }
-    }
-  }
+  // 11. Load skills (auto-detection + factory)
+  const skills = await loadSkills(config, options.loadSkill, log);
 
   // 12. Register cron handlers with cron-scheduler skill BEFORE skill init
   const cronScheduler = skills.get('cron-scheduler');
@@ -671,14 +617,7 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     store,
   };
 
-  for (const [name, skill] of skills) {
-    try {
-      await skill.init(skillContext);
-      log.info(`Initialized skill: ${name}`);
-    } catch (err) {
-      log.error(`Failed to initialize skill "${name}": ${err}`);
-    }
-  }
+  await initSkills(skills, skillContext, log);
 
   // Store event bus reference for cron handlers and other modules
   const eventBusSkill = skills.get('event-bus');
