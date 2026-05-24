@@ -14,6 +14,10 @@ import type { Logger, Skill, SkillContext } from './skill.js';
  * Earlier entries init before later ones. New skills get appended here.
  */
 export const SKILL_INIT_ORDER = [
+  // telegram-inbox FIRST so its setInbox() call patches processUpdate BEFORE
+  // adapter.start() (any later skill scheduling work that triggers adapter
+  // events sees the patched dispatch path).
+  'telegram-inbox',
   'conversation-history',
   'event-bus',
   'token-tracker',
@@ -36,6 +40,14 @@ export type KnownSkillName = (typeof SKILL_INIT_ORDER)[number];
  */
 export function detectSkills(config: BotConfig): string[] {
   const detected = new Set<string>();
+
+  // Telegram inbox auto-loads for any telegram platform (opt-out via
+  // inbox.enabled: false in YAML).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const inboxCfg = (config as any).inbox;
+  if (config.platform.type === 'telegram' && inboxCfg?.enabled !== false) {
+    detected.add('telegram-inbox');
+  }
 
   if (config.memory?.conversation_history?.enabled) detected.add('conversation-history');
   if (config.brain?.provider === 'claude' || config.brain?.provider === 'claude-cli') detected.add('token-tracker');

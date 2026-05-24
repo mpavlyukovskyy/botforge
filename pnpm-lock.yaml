@@ -115,6 +115,9 @@ importers:
       '@botforge/skill-response-formatter':
         specifier: workspace:*
         version: link:../skills/response-formatter
+      '@botforge/skill-telegram-inbox':
+        specifier: workspace:*
+        version: link:../skills/telegram-inbox
       '@botforge/skill-token-tracker':
         specifier: workspace:*
         version: link:../skills/token-tracker
@@ -272,12 +275,21 @@ importers:
         specifier: ^3.0.0
         version: 3.0.3
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.0
+        version: 7.6.13
       '@types/node-cron':
         specifier: ^3.0.0
         version: 3.0.11
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -378,6 +390,34 @@ importers:
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/skills/telegram-inbox:
+    dependencies:
+      '@botforge/adapter-telegram':
+        specifier: workspace:*
+        version: link:../../adapters/telegram
+      '@botforge/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@botforge/storage-sqlite':
+        specifier: workspace:*
+        version: link:../../storage/sqlite
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.0
+        version: 7.6.13
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -3988,7 +4028,7 @@ packages:
 
   uuid@3.4.0:
     resolution: {integrity: sha512-HjSDRw6gZE5JMggctHBcjVak08+KEVhSIiDzFnT9S9aegmp85S/bReBVTb4QTFaRNptJ9kuYaNhnbNEOkbKb/A==}
-    deprecated: Please upgrade  to version 7 or higher.  Older versions may use Math.random() in certain circumstances, which is known to be problematic.  See https://v8.dev/blog/math-random for details.
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   uuid@8.3.2:

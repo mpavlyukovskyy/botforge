@@ -22,6 +22,21 @@ import {
   type ResilienceState,
 } from './polling-resilience.js';
 
+/**
+ * Minimal interface implemented by the @botforge/skill-telegram-inbox skill.
+ * Defined here (not imported) so the adapter doesn't depend on the skill.
+ */
+export interface InboxAPI {
+  acquireForProcessing(
+    updateId: number,
+    kind: string,
+    chatId: string | null,
+    rawJson: string,
+  ): { action: 'process' } | { action: 'skip'; reason: string };
+  markDone(updateId: number): void;
+  markFailed(updateId: number, error: string): void;
+}
+
 export class TelegramAdapter implements PlatformAdapter {
   readonly platform = 'telegram';
   private bot: TelegramBot;
@@ -33,6 +48,8 @@ export class TelegramAdapter implements PlatformAdapter {
   private dynamicChatIds = new Set<string>();
   private groupJoinHandler?: (chatId: string, title: string) => void;
   private pollingResilience: ResilienceState = createState();
+  private inbox?: InboxAPI;
+  private origProcessUpdate?: (update: unknown) => void;
 
   constructor(botConfig: BotConfig, log: Logger) {
     const platform = botConfig.platform;
@@ -54,17 +71,75 @@ export class TelegramAdapter implements PlatformAdapter {
     this.bot = new TelegramBot(this.config.token, options);
   }
 
+  /**
+   * Inject a durable inbox so polled updates survive a process crash mid-handler.
+   * Called by the @botforge/skill-telegram-inbox skill during init.
+   *
+   * Patches node-telegram-bot-api's processUpdate to write each update to
+   * SQLite BEFORE dispatching to user handlers. On restart the library
+   * resumes from offset=0; Telegram replays the last 24h and the inbox's
+   * acquireForProcessing skips already-done updates.
+   */
+  setInbox(inbox: InboxAPI): void {
+    if (this.inbox) {
+      this.log.warn('TelegramAdapter.setInbox called twice; ignoring second call');
+      return;
+    }
+    this.inbox = inbox;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.origProcessUpdate = (this.bot as any).processUpdate.bind(this.bot);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (this.bot as any).processUpdate = (update: any) => {
+      try {
+        const updateId: number | undefined = update?.update_id;
+        if (typeof updateId !== 'number') {
+          return this.origProcessUpdate!(update);
+        }
+        const kind = update.message ? 'message'
+          : update.callback_query ? 'callback_query'
+          : update.edited_message ? 'edited_message'
+          : 'other';
+        const chatId: string | null =
+          update.message?.chat?.id?.toString() ??
+          update.callback_query?.message?.chat?.id?.toString() ??
+          update.edited_message?.chat?.id?.toString() ??
+          null;
+
+        const result = inbox.acquireForProcessing(updateId, kind, chatId, JSON.stringify(update));
+        if (result.action === 'skip') {
+          this.log.debug(`inbox: skip update ${updateId} (${result.reason})`);
+          return;
+        }
+        // Attach updateId so the handlers below can mark done/failed.
+        if (update.message) update.message._updateId = updateId;
+        if (update.callback_query) update.callback_query._updateId = updateId;
+        if (update.edited_message) update.edited_message._updateId = updateId;
+        return this.origProcessUpdate!(update);
+      } catch (err) {
+        this.log.error(`inbox processUpdate interceptor error: ${err}`);
+        // Degrade to at-most-once rather than zero delivery.
+        return this.origProcessUpdate!(update);
+      }
+    };
+  }
+
   async start(): Promise<void> {
     // Wire up message listener
     this.bot.on('message', async (msg) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updateId: number | undefined = (msg as any)._updateId;
       const incoming = this.convertMessage(msg);
-      if (!incoming) return;
+      if (!incoming) {
+        if (updateId !== undefined) this.inbox?.markDone(updateId);
+        return;
+      }
 
       // Filter by allowed chat IDs
       if (this.config.chat_ids?.length) {
         const chatStr = String(msg.chat.id);
         if (!this.config.chat_ids.includes(chatStr) && !this.dynamicChatIds.has(chatStr)) {
           this.log.debug(`Ignoring message from unauthorized chat ${msg.chat.id}`);
+          if (updateId !== undefined) this.inbox?.markDone(updateId);
           return;
         }
       }
@@ -72,16 +147,27 @@ export class TelegramAdapter implements PlatformAdapter {
       if (this.messageHandler) {
         try {
           await this.messageHandler(incoming);
+          if (updateId !== undefined) this.inbox?.markDone(updateId);
         } catch (err) {
           this.log.error(`Message handler error: ${err}`);
+          if (updateId !== undefined) this.inbox?.markFailed(updateId, String(err));
         }
+      } else if (updateId !== undefined) {
+        // No handler — there's nothing more we can do; treat as done so the
+        // inbox doesn't retry forever.
+        this.inbox?.markDone(updateId);
       }
     });
 
     // Wire up callback query listener
     this.bot.on('callback_query', async (query) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updateId: number | undefined = (query as any)._updateId;
       const incoming = this.convertCallback(query);
-      if (!incoming) return;
+      if (!incoming) {
+        if (updateId !== undefined) this.inbox?.markDone(updateId);
+        return;
+      }
 
       // Filter by allowed chat IDs (same whitelist as messages)
       if (this.config.chat_ids?.length) {
@@ -89,6 +175,7 @@ export class TelegramAdapter implements PlatformAdapter {
         if (!this.config.chat_ids.includes(chatStr) && !this.dynamicChatIds.has(chatStr)) {
           this.log.debug(`Ignoring callback from unauthorized chat ${chatStr}`);
           this.bot.answerCallbackQuery(query.id).catch(() => {});
+          if (updateId !== undefined) this.inbox?.markDone(updateId);
           return;
         }
       }
@@ -109,11 +196,13 @@ export class TelegramAdapter implements PlatformAdapter {
         }
       }, 5000);
 
+      let handlerError: unknown;
       if (this.callbackHandler) {
         try {
           await this.callbackHandler(incoming);
         } catch (err) {
           this.log.error(`Callback handler error: ${err}`);
+          handlerError = err;
         }
       }
 
@@ -122,6 +211,11 @@ export class TelegramAdapter implements PlatformAdapter {
       if (!answered) {
         answered = true;
         this.bot.answerCallbackQuery(query.id).catch(() => {});
+      }
+
+      if (updateId !== undefined) {
+        if (handlerError) this.inbox?.markFailed(updateId, String(handlerError));
+        else this.inbox?.markDone(updateId);
       }
     });
 

@@ -108,6 +108,30 @@ export class SqliteStorage {
   }
 }
 
+// ─── Telegram Inbox — durable at-least-once delivery ─────────────────────────
+
+export const TELEGRAM_INBOX_MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'create_tg_inbox',
+    up: `
+      CREATE TABLE IF NOT EXISTS tg_inbox (
+        update_id    INTEGER PRIMARY KEY,
+        kind         TEXT NOT NULL,
+        chat_id      TEXT,
+        raw_json     TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'received',
+        attempts     INTEGER NOT NULL DEFAULT 0,
+        received_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at   TEXT,
+        finished_at  TEXT,
+        last_error   TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_tg_inbox_status ON tg_inbox(status, received_at);
+    `,
+  },
+];
+
 // ─── Conversation History (shared pattern) ───────────────────────────────────
 
 export const CONVERSATION_HISTORY_MIGRATIONS: Migration[] = [
