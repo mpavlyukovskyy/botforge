@@ -2,7 +2,7 @@ fleet:
   server: acemagic
   ssh_host: acemagic
   ssh_user: m
-  base_dir: /opt/botforge
+  base_dir: /opt/botforge/bots
 
 bots:
   kristina:
