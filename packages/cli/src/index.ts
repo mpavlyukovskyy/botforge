@@ -164,7 +164,8 @@ program
 program
   .command('build <bot>')
   .description('Build a bot for deployment')
-  .action((bot: string) => build(bot));
+  .option('--framework-version <sha>', 'Pin the framework to a specific git SHA (builds in a worktree)')
+  .action((bot: string, opts: { frameworkVersion?: string }) => build(bot, { frameworkVersion: opts.frameworkVersion }));
 
 // ─── systemd ─────────────────────────────────────────────────────────────────
 
