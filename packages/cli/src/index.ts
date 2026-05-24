@@ -140,7 +140,8 @@ program
 program
   .command('deploy <bot>')
   .description('Build, upload, and deploy a bot to the fleet server')
-  .action((bot: string) => deploy(bot));
+  .option('--framework-version <sha>', 'Pin this bot to a specific framework SHA via systemd drop-in')
+  .action((bot: string, opts: { frameworkVersion?: string }) => deploy(bot, { frameworkVersion: opts.frameworkVersion }));
 
 // ─── rollback ────────────────────────────────────────────────────────────────
 
