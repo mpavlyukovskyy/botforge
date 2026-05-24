@@ -14,6 +14,13 @@ import type {
   TelegramPlatform,
   Logger,
 } from '@botforge/core';
+import {
+  createState,
+  onPollingError,
+  onSuccessfulPoll,
+  setPaused,
+  type ResilienceState,
+} from './polling-resilience.js';
 
 export class TelegramAdapter implements PlatformAdapter {
   readonly platform = 'telegram';
@@ -25,6 +32,7 @@ export class TelegramAdapter implements PlatformAdapter {
   private log: Logger;
   private dynamicChatIds = new Set<string>();
   private groupJoinHandler?: (chatId: string, title: string) => void;
+  private pollingResilience: ResilienceState = createState();
 
   constructor(botConfig: BotConfig, log: Logger) {
     const platform = botConfig.platform;
@@ -119,7 +127,12 @@ export class TelegramAdapter implements PlatformAdapter {
 
     this.bot.on('polling_error', (err) => {
       this.log.error(`Polling error: ${err.message}`);
+      this.handlePollingError(err);
     });
+
+    // A successful update means polling is working — reset any escalation.
+    this.bot.on('message', () => onSuccessfulPoll(this.pollingResilience));
+    this.bot.on('callback_query', () => onSuccessfulPoll(this.pollingResilience));
 
     // Auto-detect group joins/removals
     this.bot.on('my_chat_member', async (update: any) => {
@@ -147,6 +160,46 @@ export class TelegramAdapter implements PlatformAdapter {
     }
     this.connected = false;
     this.log.info('Telegram adapter stopped');
+  }
+
+  private async handlePollingError(err: unknown): Promise<void> {
+    const decision = onPollingError(this.pollingResilience, err);
+    switch (decision.action) {
+      case 'noop':
+      case 'log_only':
+        return;
+      case 'exit_fatal':
+        this.log.error('Polling error is fatal (auth/permission) — exiting for operator intervention');
+        process.exit(1);
+        return;
+      case 'exit_watchdog':
+        this.log.error(
+          `Polling-error watchdog tripped: ${decision.recentErrorCount} errors in ${this.pollingResilience.watchdogWindowMs}ms — exiting for systemd restart`,
+        );
+        process.exit(1);
+        return;
+      case 'backoff':
+        await this.pausePolling(decision.ms, decision.level);
+        return;
+    }
+  }
+
+  private async pausePolling(ms: number, level: number): Promise<void> {
+    setPaused(this.pollingResilience, true);
+    this.log.warn(`Transient polling error; pausing polling for ${ms}ms (escalation level ${level})`);
+    try {
+      // node-telegram-bot-api keeps internal state for stop/start. Awaiting both
+      // makes sure we don't race a second pause window against ourselves.
+      await this.bot.stopPolling();
+      await new Promise((r) => setTimeout(r, ms));
+      await this.bot.startPolling();
+      this.log.info(`Polling resumed after ${ms}ms pause`);
+    } catch (err) {
+      this.log.error(`Failed to restart polling after backoff: ${err}`);
+      process.exit(1);
+    } finally {
+      setPaused(this.pollingResilience, false);
+    }
   }
 
   onMessage(handler: MessageHandler): void {
