@@ -71,6 +71,7 @@ const ClaudeBrainSchema = z.object({
   max_tokens: z.number().positive().default(4096),
   max_iterations: z.number().positive().optional().describe('Max agentic turns (maps to SDK maxTurns)'),
   max_budget_usd: z.number().positive().optional().describe('Max cost per query in USD'),
+  budget_usd_per_day: z.number().positive().optional().describe('Per-day cumulative spend cap; refuse new calls when exceeded'),
 });
 
 const ClaudeCliBrainSchema = z.object({
@@ -82,6 +83,7 @@ const ClaudeCliBrainSchema = z.object({
   temperature: z.number().min(0).max(1).default(0),
   max_tokens: z.number().positive().default(4096),
   max_iterations: z.number().positive().optional().describe('Max tool-calling turns (default 5)'),
+  budget_usd_per_day: z.number().positive().optional().describe('Per-day cumulative spend cap'),
 });
 
 const GeminiBrainSchema = z.object({

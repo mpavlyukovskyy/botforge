@@ -73,6 +73,21 @@ export class TokenTrackerSkill implements Skill {
     return (row?.total ?? 0) / 100; // Return USD
   }
 
+  /**
+   * Total USD spent for a given date (default: today). Used by the
+   * brain-processor budget gate to decide whether to refuse a call.
+   */
+  getDailySpend(date?: string): number {
+    if (!this.storage) return 0;
+    const d = date ?? new Date().toISOString().split('T')[0];
+    const row = this.storage.db.prepare(`
+      SELECT SUM(cost_cents) as total
+      FROM token_usage
+      WHERE date = ?
+    `).get(d) as { total: number | null } | undefined;
+    return (row?.total ?? 0) / 100;
+  }
+
   async destroy(): Promise<void> {
     this.storage?.close();
   }

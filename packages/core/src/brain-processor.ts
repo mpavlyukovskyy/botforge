@@ -181,6 +181,32 @@ export function createBrainProcessor(
     // Clear any previous post-response actions
     storeAccess.clearPostResponse(inst.store);
 
+    // Budget gate — refuse calls past brain.budget_usd_per_day.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const budgetCap = (config.brain as any).budget_usd_per_day as number | undefined;
+    if (budgetCap && budgetCap > 0) {
+      const tokenTracker = inst.skills.get('token-tracker');
+      if (tokenTracker && 'getDailySpend' in tokenTracker) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const spent = (tokenTracker as any).getDailySpend() as number;
+        if (spent >= budgetCap) {
+          log.warn(`Budget exhausted: $${spent.toFixed(4)} / $${budgetCap.toFixed(2)}/day — refusing brain call`);
+          // Stamped store key lets a one-time admin DM fire elsewhere (T2.8).
+          inst.store.set('budgetExhausted', { spent, cap: budgetCap, at: Date.now() });
+          await inst.adapter.send({
+            chatId: message.chatId,
+            text: "I've hit today's spending cap. Try again tomorrow.",
+          });
+          return;
+        }
+        // 80% warning — store a flag so the daily-digest can include it.
+        if (spent >= 0.8 * budgetCap && !inst.store.get('budgetWarn80')) {
+          log.warn(`Budget at ${Math.round(100 * spent / budgetCap)}% ($${spent.toFixed(4)} / $${budgetCap.toFixed(2)}/day)`);
+          inst.store.set('budgetWarn80', { spent, cap: budgetCap, at: Date.now() });
+        }
+      }
+    }
+
     // Build userMessage with file metadata for document attachments
     let userMessage = message.text ?? '';
     if (message.type === 'document' && files?.length) {
