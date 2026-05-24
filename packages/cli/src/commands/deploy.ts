@@ -3,7 +3,39 @@ import { execSync } from 'node:child_process';
 import { loadFleetConfig, type FleetBotConfig } from '../fleet.js';
 import { build } from './build.js';
 
-export async function deploy(botName: string): Promise<void> {
+/**
+ * Pluggable remote-execution surface. Real deploys use SSH; tests pass a fake.
+ * Returns stdout (empty string if the caller didn't ask for it via opts).
+ */
+export interface DeployIO {
+  /** Run a shell command remotely; throws on non-zero exit. */
+  runRemote: (cmd: string, opts?: { capture?: boolean }) => string;
+  /** scp a local path to a remote target (rsync-recursive semantics). */
+  scp: (local: string, remote: string) => void;
+}
+
+function makeSshIO(sshHost: string, sshUser: string): DeployIO {
+  const ssh = `ssh ${sshUser ? `${sshUser}@` : ''}${sshHost}`;
+  return {
+    runRemote(cmd, opts) {
+      if (opts?.capture) {
+        return execSync(`${ssh} "${cmd}"`, { encoding: 'utf-8' });
+      }
+      execSync(`${ssh} "${cmd}"`, { stdio: 'inherit' });
+      return '';
+    },
+    scp(local, remote) {
+      execSync(`scp -r ${local} ${sshUser ? `${sshUser}@` : ''}${sshHost}:${remote}`, { stdio: 'inherit' });
+    },
+  };
+}
+
+export interface DeployOptions {
+  /** Override the SSH layer (tests inject a fake). */
+  io?: DeployIO;
+}
+
+export async function deploy(botName: string, options: DeployOptions = {}): Promise<void> {
   const fleet = loadFleetConfig();
   const bot = fleet.bots[botName];
   if (!bot) {
@@ -12,7 +44,7 @@ export async function deploy(botName: string): Promise<void> {
   }
 
   const { ssh_host, ssh_user, base_dir } = fleet.fleet;
-  const ssh = `ssh ${ssh_user}@${ssh_host}`;
+  const io = options.io ?? makeSshIO(ssh_host, ssh_user);
 
   console.log(`Deploying ${botName}...`);
 
@@ -21,32 +53,32 @@ export async function deploy(botName: string): Promise<void> {
 
   const distDir = resolve(`dist/${botName}`);
 
-  // 4. Upload to server
+  // 2. Upload to server
   console.log('  Uploading...');
   const remoteDir = `${base_dir}/${botName}`;
-  execSync(`${ssh} "mkdir -p ${remoteDir}.new"`, { stdio: 'inherit' });
-  execSync(`scp -r ${distDir}/* ${ssh_user}@${ssh_host}:${remoteDir}.new/`, { stdio: 'inherit' });
+  io.runRemote(`mkdir -p ${remoteDir}.new`);
+  io.scp(`${distDir}/*`, `${remoteDir}.new/`);
 
-  // 5. Atomic swap
+  // 3. Atomic swap
   console.log('  Swapping...');
-  execSync(`${ssh} "[ -d ${remoteDir} ] && mv ${remoteDir} ${remoteDir}.old; mv ${remoteDir}.new ${remoteDir}"`, { stdio: 'inherit' });
+  io.runRemote(`[ -d ${remoteDir} ] && mv ${remoteDir} ${remoteDir}.old; mv ${remoteDir}.new ${remoteDir}`);
 
-  // 6. Restart service
+  // 4. Restart service
   console.log('  Restarting service...');
-  execSync(`${ssh} "systemctl restart ${bot.service}"`, { stdio: 'inherit' });
+  io.runRemote(`systemctl restart ${bot.service}`);
 
-  // 7. Health check (wait 5s then check)
+  // 5. Health check (wait 5s then check)
   console.log('  Waiting for health check...');
   await new Promise(r => setTimeout(r, 5000));
 
   try {
     const healthUrl = `http://localhost:${bot.port}/api/health`;
-    const result = execSync(`${ssh} "curl -sf ${healthUrl}"`, { encoding: 'utf-8' });
+    const result = io.runRemote(`curl -sf ${healthUrl}`, { capture: true });
     const health = JSON.parse(result);
     if (health.status === 'healthy') {
       console.log(`  ✓ ${botName} deployed successfully (${health.uptime}s uptime)`);
       // Clean up old version
-      execSync(`${ssh} "rm -rf ${remoteDir}.old"`, { stdio: 'inherit' });
+      io.runRemote(`rm -rf ${remoteDir}.old`);
       return;
     }
   } catch {
@@ -54,7 +86,9 @@ export async function deploy(botName: string): Promise<void> {
   }
 
   console.error('  ✗ Health check failed! Rolling back...');
-  execSync(`${ssh} "mv ${remoteDir} ${remoteDir}.failed; mv ${remoteDir}.old ${remoteDir}; systemctl restart ${bot.service}"`, { stdio: 'inherit' });
+  io.runRemote(
+    `mv ${remoteDir} ${remoteDir}.failed; mv ${remoteDir}.old ${remoteDir}; systemctl restart ${bot.service}`,
+  );
   console.error(`  Rolled back to previous version`);
   process.exit(1);
 }
