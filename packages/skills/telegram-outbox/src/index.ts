@@ -44,6 +44,7 @@ export class TelegramOutboxSkill implements Skill {
   readonly name = 'telegram-outbox';
   private storage?: SqliteStorage;
   private workerTimer?: NodeJS.Timeout;
+  private pruneTimer?: NodeJS.Timeout;
   private adapter?: PlatformAdapter;
   private log?: Logger;
   private pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
@@ -84,12 +85,24 @@ export class TelegramOutboxSkill implements Skill {
     }, this.pollIntervalMs);
     this.workerTimer.unref?.();
 
+    // Daily prune of old 'sent' rows.
+    this.pruneTimer = setInterval(() => {
+      try {
+        const removed = this.pruneSent(7);
+        if (removed > 0) ctx.log.info(`telegram-outbox: pruned ${removed} old 'sent' rows`);
+      } catch (err) {
+        ctx.log.error(`telegram-outbox prune error: ${err}`);
+      }
+    }, 24 * 60 * 60 * 1000);
+    this.pruneTimer.unref?.();
+
     ctx.log.info(`telegram-outbox: enabled (poll ${this.pollIntervalMs}ms, ${this.backoffs.length}-step backoff)`);
   }
 
   async destroy(): Promise<void> {
     this.stopped = true;
     if (this.workerTimer) clearInterval(this.workerTimer);
+    if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.storage?.close();
   }
 

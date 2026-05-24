@@ -57,6 +57,7 @@ export class TelegramInboxSkill implements Skill {
   readonly name = 'telegram-inbox';
   private storage?: SqliteStorage;
   private reaperTimer?: NodeJS.Timeout;
+  private pruneTimer?: NodeJS.Timeout;
   private processingTimeoutMs = DEFAULT_PROCESSING_TIMEOUT_MS;
   private reaperIntervalMs = DEFAULT_REAPER_INTERVAL_MS;
 
@@ -110,11 +111,23 @@ export class TelegramInboxSkill implements Skill {
     // Don't block process exit on the timer.
     this.reaperTimer.unref?.();
 
+    // Daily prune of old 'done' rows (T3.9 — log retention).
+    this.pruneTimer = setInterval(() => {
+      try {
+        const removed = this.pruneDone(30);
+        if (removed > 0) ctx.log.info(`telegram-inbox: pruned ${removed} old 'done' rows`);
+      } catch (err) {
+        ctx.log.error(`telegram-inbox prune error: ${err}`);
+      }
+    }, 24 * 60 * 60 * 1000);
+    this.pruneTimer.unref?.();
+
     ctx.log.info(`telegram-inbox: enabled (timeout ${this.processingTimeoutMs}ms, reaper ${this.reaperIntervalMs}ms)`);
   }
 
   async destroy(): Promise<void> {
     if (this.reaperTimer) clearInterval(this.reaperTimer);
+    if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.storage?.close();
   }
 

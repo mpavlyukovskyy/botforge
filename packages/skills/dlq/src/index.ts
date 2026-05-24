@@ -37,6 +37,7 @@ export interface DlqRow {
 export class DlqSkill implements Skill {
   readonly name = 'dlq';
   private storage?: SqliteStorage;
+  private pruneTimer?: NodeJS.Timeout;
 
   async init(ctx: SkillContext): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,10 +51,23 @@ export class DlqSkill implements Skill {
       migrations: DLQ_MIGRATIONS,
       log: ctx.log,
     });
+
+    // Daily prune of dead rows older than 30 days (T3.9 — log retention).
+    this.pruneTimer = setInterval(() => {
+      try {
+        const removed = this.prune(30);
+        if (removed > 0) ctx.log.info(`dlq: pruned ${removed} old dead rows`);
+      } catch (err) {
+        ctx.log.error(`dlq prune error: ${err}`);
+      }
+    }, 24 * 60 * 60 * 1000);
+    this.pruneTimer.unref?.();
+
     ctx.log.info('dlq: ready');
   }
 
   async destroy(): Promise<void> {
+    if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.storage?.close();
   }
 
