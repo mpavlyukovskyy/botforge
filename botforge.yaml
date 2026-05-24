@@ -1,7 +1,7 @@
 fleet:
-  server: openclaw
-  ssh_host: ${OPENCLAW_SSH_HOST}
-  ssh_user: root
+  server: acemagic
+  ssh_host: acemagic
+  ssh_user: m
   base_dir: /opt/botforge
 
 bots:

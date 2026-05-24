@@ -30,10 +30,17 @@ export async function fleetStatus(opts: FleetStatusOptions = {}): Promise<void> 
   for (const [botName, bot] of Object.entries(fleet.bots) as [string, FleetBotConfig][]) {
     const entry: FleetStatusEntry = {
       bot: botName,
-      service: bot.service,
+      service: bot.service ?? '(no service)',
       port: bot.port,
       status: 'unreachable',
     };
+
+    // Skip bots that don't expose a port (test fixtures, etc.).
+    if (!bot.port) {
+      entry.error = 'no port configured';
+      results.push(entry);
+      continue;
+    }
 
     try {
       const healthUrl = `http://localhost:${bot.port}/api/health`;
@@ -84,9 +91,10 @@ function printDriftTable(results: FleetStatusEntry[]): void {
     const uptime = r.uptime !== undefined ? formatUptime(r.uptime) : '—';
     const statusLabel =
       r.status === 'healthy' ? 'healthy' : r.status === 'unhealthy' ? 'unhealthy' : 'unreachable';
+    const serviceLabel = (r.service ?? '—').padEnd(29);
 
     console.log(
-      `${r.bot.padEnd(20)} ${r.service.padEnd(29)} ${statusLabel.padEnd(12)} ${(sha + drift).padEnd(13)} ${uptime}`,
+      `${r.bot.padEnd(20)} ${serviceLabel} ${statusLabel.padEnd(12)} ${(sha + drift).padEnd(13)} ${uptime}`,
     );
 
     if (r.error) {
