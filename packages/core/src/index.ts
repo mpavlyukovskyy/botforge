@@ -32,6 +32,21 @@ export { shouldAllow } from './rate-limiter.js';
 export { setRef, getRef, extractRefs, expandRefs, clearRefs } from './numbered-refs.js';
 export { getFrameworkSha, _resetFrameworkShaCache } from './framework-info.js';
 export { STORE_KEYS, storeAccess, type BotStore, type PostResponseHint } from './bot-store.js';
+export {
+  CallbackIdempotency,
+  callbackIdempotency,
+  withCallbackIdempotency,
+  type IdempotencyOptions,
+} from './callback-idempotency.js';
+export {
+  withTimeout,
+  anySignal,
+  TimeoutError,
+  DEFAULT_LLM_TIMEOUT_MS,
+  DEFAULT_TOOL_TIMEOUT_MS,
+  DEFAULT_HTTP_TIMEOUT_MS,
+  type TimeoutOptions,
+} from './abort.js';
 
 // Adapter types
 export type {
