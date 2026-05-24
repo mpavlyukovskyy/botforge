@@ -97,6 +97,9 @@ importers:
       '@botforge/skill-daily-digest':
         specifier: workspace:*
         version: link:../skills/daily-digest
+      '@botforge/skill-dlq':
+        specifier: workspace:*
+        version: link:../skills/dlq
       '@botforge/skill-event-bus':
         specifier: workspace:*
         version: link:../skills/event-bus
@@ -306,6 +309,31 @@ importers:
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/skills/dlq:
+    dependencies:
+      '@botforge/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@botforge/storage-sqlite':
+        specifier: workspace:*
+        version: link:../../storage/sqlite
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.0
+        version: 7.6.13
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

@@ -108,6 +108,29 @@ export class SqliteStorage {
   }
 }
 
+// ─── Dead-letter queue (T2.3) ────────────────────────────────────────────────
+
+export const DLQ_MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'create_dlq',
+    up: `
+      CREATE TABLE IF NOT EXISTS dlq (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind         TEXT NOT NULL,
+        payload      TEXT NOT NULL,
+        error        TEXT NOT NULL,
+        occurred_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        attempts     INTEGER NOT NULL DEFAULT 1,
+        status       TEXT NOT NULL DEFAULT 'pending',
+        replayed_at  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_dlq_status ON dlq(status, occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_dlq_kind ON dlq(kind, occurred_at);
+    `,
+  },
+];
+
 // ─── Telegram Inbox — durable at-least-once delivery ─────────────────────────
 
 export const TELEGRAM_INBOX_MIGRATIONS: Migration[] = [

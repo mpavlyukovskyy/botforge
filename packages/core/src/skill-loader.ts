@@ -18,6 +18,7 @@ export const SKILL_INIT_ORDER = [
   // adapter.start() (any later skill scheduling work that triggers adapter
   // events sees the patched dispatch path).
   'telegram-inbox',
+  'dlq',
   'conversation-history',
   'event-bus',
   'token-tracker',
@@ -47,6 +48,13 @@ export function detectSkills(config: BotConfig): string[] {
   const inboxCfg = (config as any).inbox;
   if (config.platform.type === 'telegram' && inboxCfg?.enabled !== false) {
     detected.add('telegram-inbox');
+  }
+
+  // DLQ auto-loads for every bot (opt-out via dlq.enabled: false).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dlqCfg = (config as any).dlq;
+  if (dlqCfg?.enabled !== false) {
+    detected.add('dlq');
   }
 
   if (config.memory?.conversation_history?.enabled) detected.add('conversation-history');
