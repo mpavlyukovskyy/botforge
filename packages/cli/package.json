@@ -28,6 +28,7 @@
     "@botforge/skill-reply-context": "workspace:*",
     "@botforge/skill-response-formatter": "workspace:*",
     "@botforge/skill-telegram-inbox": "workspace:*",
+    "@botforge/skill-telegram-outbox": "workspace:*",
     "@botforge/skill-dlq": "workspace:*",
     "commander": "^13.0.0",
     "yaml": "^2.7.0"

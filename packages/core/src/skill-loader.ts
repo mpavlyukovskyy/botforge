@@ -18,6 +18,7 @@ export const SKILL_INIT_ORDER = [
   // adapter.start() (any later skill scheduling work that triggers adapter
   // events sees the patched dispatch path).
   'telegram-inbox',
+  'telegram-outbox',
   'dlq',
   'conversation-history',
   'event-bus',
@@ -48,6 +49,13 @@ export function detectSkills(config: BotConfig): string[] {
   const inboxCfg = (config as any).inbox;
   if (config.platform.type === 'telegram' && inboxCfg?.enabled !== false) {
     detected.add('telegram-inbox');
+  }
+
+  // Telegram outbox: opt-out same as inbox; harmless when no bot enqueues.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const outboxCfg = (config as any).outbox;
+  if (config.platform.type === 'telegram' && outboxCfg?.enabled !== false) {
+    detected.add('telegram-outbox');
   }
 
   // DLQ auto-loads for every bot (opt-out via dlq.enabled: false).

@@ -108,6 +108,29 @@ export class SqliteStorage {
   }
 }
 
+// ─── Telegram Outbox (T2.1) ──────────────────────────────────────────────────
+
+export const TELEGRAM_OUTBOX_MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'create_tg_outbox',
+    up: `
+      CREATE TABLE IF NOT EXISTS tg_outbox (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id       TEXT NOT NULL,
+        payload_json  TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'pending',
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        last_error    TEXT,
+        created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+        next_attempt_at TEXT,
+        sent_at       TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_tg_outbox_status ON tg_outbox(status, next_attempt_at);
+    `,
+  },
+];
+
 // ─── Dead-letter queue (T2.3) ────────────────────────────────────────────────
 
 export const DLQ_MIGRATIONS: Migration[] = [
