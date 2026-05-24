@@ -71,10 +71,10 @@ program
         return;
       }
 
-      // T3.6: open a shared SQLite handle so skills like cron-scheduler that
-      // need persistence (ctx.db) get one. Skills that own their own DB
-      // (token-tracker, conversation-history) continue to use SqliteStorage
-      // directly against the same file — SQLite WAL handles concurrent
+      // T3.6: open a shared SQLite handle so skills that need persistence
+      // (e.g. cron-scheduler's in_flight CAS) can use ctx.db. Skills that
+      // own their own SqliteStorage handles (token-tracker, conv-history)
+      // continue against the same file — SQLite WAL handles concurrent
       // connections cleanly.
       const config = loadConfig(absPath);
       mkdirSync('data', { recursive: true });
@@ -83,6 +83,14 @@ program
         migrations: [],
         log: { debug() {}, info() {}, warn() {}, error() {} },
       });
+      // DatabaseLike wrapper — proxies run() to prepare().run() so callers
+      // get a one-shot 'just execute this SQL' surface without managing
+      // prepared statements.
+      const dbWrapper = {
+        run: (sql: string, ...params: unknown[]) => sharedStorage.db.prepare(sql).run(...(params as never[])),
+        prepare: (sql: string) => sharedStorage.db.prepare(sql),
+        close: () => sharedStorage.close(),
+      };
 
       const instance = await startBot(absPath, {
         createAdapter: (config, log) => {
@@ -96,7 +104,7 @@ program
         loadSkill,
         toolsDir,
         echo: opts.echo,
-        db: sharedStorage.db as any,
+        db: dbWrapper,
       });
 
       console.log(`Bot "${instance.config.name}" is running. Press Ctrl+C to stop.`);
