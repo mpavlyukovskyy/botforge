@@ -21,6 +21,7 @@ import { withChatLock } from './chat-lock.js';
 import { shouldAllow } from './rate-limiter.js';
 import { STORE_KEYS, storeAccess, type BotStore } from './bot-store.js';
 import { loadSkills, initSkills } from './skill-loader.js';
+import { shouldProcessMessage } from './reception.js';
 
 export type AdapterFactory = (config: BotConfig, log: Logger) => PlatformAdapter;
 export type SkillFactory = (name: string) => Promise<Skill>;
@@ -725,69 +726,14 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
       // Unknown command — fall through to brain
     }
 
-    // 17d. Reception rules
-    if (message.isGroup) {
-      const groupMode = receptionCfg?.group_mode ?? 'always';
-
-      if (groupMode === 'ignore') return;
-
-      if (groupMode === 'passive') {
-        let shouldProcess = false;
-
-        // Reply to THIS bot (not any bot)
-        if (receptionCfg?.respond_to_replies !== false
-            && message.replyToUserId
-            && instance.botId
-            && message.replyToUserId === instance.botId) {
-          shouldProcess = true;
-        }
-
-        // @mention with word boundary
-        if (!shouldProcess && receptionCfg?.respond_to_mentions !== false && instance.botUsername) {
-          const mentionRegex = new RegExp(`@${instance.botUsername}\\b`, 'i');
-          if (message.text && mentionRegex.test(message.text)) shouldProcess = true;
-        }
-
-        // Keyword/pattern matching (inline for new config, skill for legacy)
-        if (!shouldProcess && message.text) {
-          const keywords = receptionCfg?.keywords ?? [];
-          const patterns = receptionCfg?.patterns ?? [];
-          const caseSensitive = receptionCfg?.case_sensitive ?? false;
-          const compareText = caseSensitive ? message.text : message.text.toLowerCase();
-
-          for (const kw of keywords) {
-            if (compareText.includes(caseSensitive ? kw : kw.toLowerCase())) {
-              shouldProcess = true;
-              break;
-            }
-          }
-          if (!shouldProcess) {
-            for (const p of patterns) {
-              if (new RegExp(p, caseSensitive ? '' : 'i').test(message.text)) {
-                shouldProcess = true;
-                break;
-              }
-            }
-          }
-        }
-
-        if (!shouldProcess) return;
-      }
-      // groupMode === 'always' → fall through
-    } else {
-      // DM reception rules
-      const dmMode = receptionCfg?.dm_mode ?? 'always';
-      if (dmMode === 'ignore') return;
-      if (dmMode === 'keyword_only' && message.text) {
-        const keywords = receptionCfg?.keywords ?? [];
-        const caseSensitive = receptionCfg?.case_sensitive ?? false;
-        const compareText = caseSensitive ? message.text : message.text.toLowerCase();
-        let matched = false;
-        for (const kw of keywords) {
-          if (compareText.includes(caseSensitive ? kw : kw.toLowerCase())) { matched = true; break; }
-        }
-        if (!matched) return;
-      }
+    // 17d. Reception rules (pure decision via reception.ts)
+    const decision = shouldProcessMessage(message, receptionCfg, {
+      botId: instance.botId,
+      botUsername: instance.botUsername,
+    });
+    if (!decision.process) {
+      log.debug(`Reception dropped message: ${decision.reason}`);
+      return;
     }
 
     // 17e. Rate limiter
