@@ -24,6 +24,7 @@ import { systemd } from './commands/systemd.js';
 import { build } from './commands/build.js';
 import { create } from './commands/create.js';
 import { fleetStatus } from './commands/fleet-status.js';
+import { canaryGc } from './commands/canary-gc.js';
 
 const program = new Command();
 
@@ -131,9 +132,17 @@ program
 
 program
   .command('fleet-status')
-  .description('SSH into the fleet host and report framework SHA drift across bots')
+  .description('SSH into the fleet host and report framework SHA drift + canary state across bots')
   .option('--json', 'Emit machine-readable JSON instead of a human-readable table')
   .action((opts: { json?: boolean }) => fleetStatus(opts));
+
+// ─── canary-gc ───────────────────────────────────────────────────────────────
+
+program
+  .command('canary-gc')
+  .description('List pinned-framework dirs on the server; clean up orphans')
+  .option('--force', 'Actually delete orphans (default: dry-run)')
+  .action((opts: { force?: boolean }) => canaryGc(opts));
 
 // ─── deploy ──────────────────────────────────────────────────────────────────
 
