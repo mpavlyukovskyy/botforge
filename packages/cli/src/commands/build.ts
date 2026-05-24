@@ -1,10 +1,23 @@
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { mkdirSync, copyFileSync, existsSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, writeFileSync } from 'node:fs';
 import { loadFleetConfig } from '../fleet.js';
 
 /** Convention directories that may exist in a bot directory */
 const CONVENTION_DIRS = ['tools', 'commands', 'callbacks', 'cron', 'context', 'lifecycle', 'lib'];
+
+/**
+ * Read the framework's git SHA. Falls back to "unknown" outside a git checkout
+ * (e.g., extracted tarball). Always returns a string suitable for the
+ * FRAMEWORK_SHA file.
+ */
+export function currentFrameworkSha(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
 
 export function build(botName: string): void {
   const fleet = loadFleetConfig();
@@ -19,6 +32,14 @@ export function build(botName: string): void {
   // 1. Build all workspace packages
   console.log('  Compiling workspace packages...');
   execSync('pnpm -r build', { stdio: 'inherit' });
+
+  // 1a. Stamp the framework SHA into @botforge/core's dist so getFrameworkSha()
+  //     (and therefore /api/health) reports it at runtime.
+  const sha = currentFrameworkSha();
+  const coreShaPath = resolve('packages/core/dist/FRAMEWORK_SHA');
+  if (existsSync(dirname(coreShaPath))) {
+    writeFileSync(coreShaPath, `${sha}\n`, 'utf-8');
+  }
 
   // 2. Create dist directory
   const distDir = resolve(`dist/${botName}`);
@@ -46,6 +67,11 @@ export function build(botName: string): void {
       }
     }
   }
+
+  // 6. Stamp FRAMEWORK_SHA into the bot dist as a deploy audit trail
+  //    (the runtime SHA is read from @botforge/core's dist by getFrameworkSha()).
+  writeFileSync(resolve(distDir, 'FRAMEWORK_SHA'), `${sha}\n`, 'utf-8');
+  console.log(`  FRAMEWORK_SHA: ${sha === 'unknown' ? sha : sha.slice(0, 12)}`);
 
   console.log(`✓ Built ${botName} → dist/${botName}/`);
 }

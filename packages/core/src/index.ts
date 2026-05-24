@@ -20,6 +20,7 @@ export { CallbackRegistry, type CallbackActionHandler, type CallbackContext } fr
 export { withChatLock } from './chat-lock.js';
 export { shouldAllow } from './rate-limiter.js';
 export { setRef, getRef, extractRefs, expandRefs, clearRefs } from './numbered-refs.js';
+export { getFrameworkSha, _resetFrameworkShaCache } from './framework-info.js';
 
 // Adapter types
 export type {

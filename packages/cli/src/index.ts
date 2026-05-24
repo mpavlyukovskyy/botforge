@@ -23,6 +23,7 @@ import { logs } from './commands/logs.js';
 import { systemd } from './commands/systemd.js';
 import { build } from './commands/build.js';
 import { create } from './commands/create.js';
+import { fleetStatus } from './commands/fleet-status.js';
 
 const program = new Command();
 
@@ -125,6 +126,14 @@ program
   .command('status')
   .description('Show fleet status by querying health endpoints')
   .action(() => status());
+
+// ─── fleet-status ────────────────────────────────────────────────────────────
+
+program
+  .command('fleet-status')
+  .description('SSH into the fleet host and report framework SHA drift across bots')
+  .option('--json', 'Emit machine-readable JSON instead of a human-readable table')
+  .action((opts: { json?: boolean }) => fleetStatus(opts));
 
 // ─── deploy ──────────────────────────────────────────────────────────────────
 

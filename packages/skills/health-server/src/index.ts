@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import type { Skill, SkillContext } from '@botforge/core';
+import { getFrameworkSha, type Skill, type SkillContext } from '@botforge/core';
 
 const LOG_BUFFER_SIZE = 1000;
 
@@ -30,6 +30,7 @@ export class HealthServerSkill implements Skill {
           version: ctx.config.version,
           platform: ctx.config.platform.type,
           brain: ctx.config.brain.provider,
+          framework_sha: getFrameworkSha(),
         };
         res.writeHead(200);
         res.end(JSON.stringify(health));
