@@ -14,6 +14,7 @@ export {
 } from './skill.js';
 
 // Brain
+export { classifyError, renderError, shortRef, maybeNotifyAdmin, type ErrorClass } from './error-messages.js';
 export { askBrain, type BrainTool, type BrainConfig, type BrainInput, type BrainResponse } from './brain.js';
 export { askBrainCli } from './brain-cli.js';
 export { askGemini, type GeminiBrainConfig, type GeminiInput, type GeminiResponse } from './brain-gemini.js';

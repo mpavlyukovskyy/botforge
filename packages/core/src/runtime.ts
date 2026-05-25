@@ -12,6 +12,7 @@ import type { PlatformAdapter, IncomingMessage } from './adapter.js';
 import type { BotConfig } from './schema.js';
 import { ToolRegistry, loadToolsFromDir } from './tool-registry.js';
 import { loadModulesFromDir } from './module-loader.js';
+import { classifyError, renderError, shortRef } from './error-messages.js';
 import { CommandRegistry, parseCommand, type ModuleContext, type CommandHandler } from './command-registry.js';
 import { CallbackRegistry, type CallbackActionHandler, type CallbackContext } from './callback-registry.js';
 import { withChatLock } from './chat-lock.js';
@@ -445,11 +446,14 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
         try {
           await instance.processMessage(message, instance);
         } catch (err) {
-          log.error(`Error processing message: ${err}`);
+          const errorClass = classifyError(err);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const ref = shortRef();
+          log.error(`Error processing message [class=${errorClass} ref=${ref}]: ${errMsg}`);
           try {
             await adapter.send({
               chatId: message.chatId,
-              text: "Sorry, I couldn't process that. Please try again.",
+              text: renderError(errorClass, { errorMessage: errMsg, ref }),
             });
           } catch {
             // Ignore send failure
