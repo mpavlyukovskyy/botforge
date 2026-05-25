@@ -1,0 +1,13 @@
+{
+  "name": "Upper — Backup",
+  "focus": "Chest, back, shoulders, arms",
+  "recovery_band": "green",
+  "exercises": [
+    {"template_id": "3601968B", "title": "Bench Press (Dumbbell)", "sets": 4, "reps": 8, "rpe": 8},
+    {"template_id": "55E6546F", "title": "Bent Over Row (Barbell)", "sets": 4, "reps": 8, "rpe": 8},
+    {"template_id": "878CD1D0", "title": "Shoulder Press (Dumbbell)", "sets": 3, "reps": 10, "rpe": 8},
+    {"template_id": "1B2B1E7C", "title": "Pull Up", "sets": 3, "reps": 8, "rpe": 8},
+    {"template_id": "422B08F1", "title": "Lateral Raise (Dumbbell)", "sets": 3, "reps": 15, "rpe": 8},
+    {"template_id": "FAB6EB2F", "title": "Preacher Curl (Dumbbell)", "sets": 3, "reps": 10, "rpe": 8}
+  ]
+}

@@ -13,7 +13,7 @@ import {
   getAllExerciseConfigs, updateMuscleFatigue,
   getFeedbackForDate,
 } from '../lib/db.js';
-import { sendFeedbackPrompt } from '../callbacks/workout-feedback.js';
+// Feedback prompts removed 2026-05-23 — Mark explicitly doesn't want post-workout questions.
 import { getRecovery, getSleep, getCycles, parseRecoveryData, parseSleepData, parseCycleData } from '../lib/whoop-client.js';
 import { getSleepData, isConfigured as eightsleepConfigured } from '../lib/eightsleep-client.js';
 import { getWorkoutsInRange, syncTemplatesFromWorkouts, parseWorkoutForCache, fetchAllExerciseTemplates } from '../lib/hevy-client.js';
@@ -192,28 +192,7 @@ export default {
       ctx.log.warn(`Muscle fatigue computation failed: ${err.message}`);
     }
 
-    // ── Feedback prompt for yesterday's workouts ──────────────────────────
-    try {
-      const yesterdayWorkouts = getCachedWorkouts(ctx.config, yesterday, yesterday);
-      const existingFeedback = getFeedbackForDate(ctx.config, yesterday);
-
-      if (yesterdayWorkouts.length > 0 && existingFeedback.length === 0) {
-        const chatId = ctx.store?.get('chat_id')
-          || ctx.config.platform?.chat_ids?.[0]
-          || process.env.TRAINER_CHAT_ID;
-
-        if (chatId) {
-          const latestSession = yesterdayWorkouts[0]; // already sorted DESC
-          await sendFeedbackPrompt(
-            ctx, chatId,
-            latestSession.title || 'yesterday\'s workout',
-            yesterday
-          );
-        }
-      }
-    } catch (err) {
-      ctx.log.warn(`Feedback prompt check failed: ${err.message}`);
-    }
+    // (Feedback prompt removed 2026-05-23 per Mark's direction.)
 
     ctx.log.info(`Daily sync complete. Readiness: ${readiness}`);
   },

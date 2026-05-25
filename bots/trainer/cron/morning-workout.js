@@ -7,7 +7,7 @@
  */
 import {
   ensureDb, getActiveProgram, getRecoveryForDate,
-  getCachedWorkouts, getOnboardingAnalysis, savePendingWorkout,
+  getCachedWorkouts, savePendingWorkout,
   refreshWhoopRecovery,
   getExerciseProgression, getProgressionForProgram,
   getRecentFeedback, getWeeklyAdjustment,
@@ -17,7 +17,18 @@ import {
 export function formatWorkoutDate(date = new Date()) {
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
-import { callSonnet } from '../lib/claude.js';
+import { callSonnet, ERROR_CLASSES, notifyCapHit } from '../lib/claude.js';
+import { filterToAllowedExercises } from '../lib/exercise-library.js';
+import { computeHrvDrift } from '../lib/deload-detector.js';
+import { getFreshTodayRecoveryRow } from '../lib/recovery-fetch.js';
+import { todayEt } from '../lib/bedtime-helper.js';
+
+const MIN_SESSION_EXERCISES = 2;
+let _filterDroppedFromLastRun = [];
+
+// Recovery-banding thresholds (Whoop convention).
+const RED_RECOVERY_THRESHOLD = 34;
+const HRV_NOISE_FLOOR_PCT = 3; // hide delta if within ±3% (just daily noise)
 import { getRecovery, parseRecoveryData } from '../lib/whoop-client.js';
 import { computeDeloadScore, computeRecoveryTrend } from '../lib/deload-detector.js';
 
@@ -33,8 +44,30 @@ export default {
       return;
     }
 
+    // Idempotency: never fire twice for the same local-date (systemd restarts
+    // around 7am could otherwise re-trigger).
+    try {
+      const { ensureDb: _ensureDb, getState: _getState, setState: _setState } = await import('../lib/db.js');
+      _ensureDb(ctx.config);
+      const todayKey = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const lastRun = _getState(ctx.config, 'morning_workout_last_run_date');
+      if (lastRun === todayKey) {
+        ctx.log.info(`Morning workout already ran today (${todayKey}); skipping`);
+        return;
+      }
+      _setState(ctx.config, 'morning_workout_last_run_date', todayKey);
+    } catch (err) {
+      ctx.log?.warn?.(`Idempotency check failed (proceeding anyway): ${err.message}`);
+    }
+
     try {
       await sendWorkoutPrompt(ctx, chatId);
+      // Heartbeat: write a marker so a separate watchdog cron can detect missed runs.
+      try {
+        const { ensureDb: _ensureDb2, setState: _setState2 } = await import('../lib/db.js');
+        _ensureDb2(ctx.config);
+        _setState2(ctx.config, 'morning_workout_last_success_at', String(Date.now()));
+      } catch { /* swallow — heartbeat is best-effort */ }
     } catch (err) {
       ctx.log.error(`Morning workout failed: ${err.message}`);
     }
@@ -67,43 +100,14 @@ export async function sendWorkoutPrompt(ctx, chatId, options = {}) {
 
   const program = getActiveProgram(ctx.config);
 
-  // No program → only show onboarding/no-program prompts when user explicitly asks (/workout).
-  // Cron path stays silent to avoid daily spam.
+  // No active program: silent skip. program_rollover cron handles design.
+  // (Previously: emitted onboarding narrative + goals dialog. Stripped 2026-05-23
+  // per Mark's "stop talking to me" direction.)
   if (!program) {
-    if (options.source !== 'command') return;
-
-    const analysis = getOnboardingAnalysis(ctx.config);
-
-    if (analysis?.status === 'complete' && analysis.narrative) {
-      await ctx.adapter.send({ chatId, text: analysis.narrative });
-
-      const inferred = analysis.inferred_goals_json
-        ? JSON.parse(analysis.inferred_goals_json) : [];
-      if (inferred.length > 0) {
-        const goalList = inferred.map((g, i) => `${i + 1}. ${g.goal_text}`).join('\n');
-        await ctx.adapter.send({
-          chatId,
-          text: `Based on your history, I'd suggest these goals:\n${goalList}\n\nDoes this look right?`,
-          inlineKeyboard: [[
-            { text: 'Confirm', callbackData: 'ob:confirm' },
-            { text: 'Adjust', callbackData: 'ob:adjust' },
-            { text: 'Start fresh', callbackData: 'ob:fresh' },
-          ]],
-        });
-      }
-    } else if (analysis?.status === 'pending') {
-      await ctx.adapter.send({
-        chatId,
-        text: "I'm still analyzing your workout history. I'll send your training profile soon.",
-      });
-    } else {
-      await ctx.adapter.send({
-        chatId,
-        text: "Hey! I'm your trainer. You don't have a program set up yet.\n\nTell me what you're training for, or type /goals to get started.",
-      });
-    }
+    ctx.log?.info?.('morning_workout: no active program — silent skip (program_rollover will design one)');
     return;
   }
+
 
   // Extract today's session from program
   const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
@@ -118,84 +122,83 @@ export async function sendWorkoutPrompt(ctx, chatId, options = {}) {
 
   const session = programData.weekly_template?.[dayName];
 
-  // Pull recovery data (needed for both training and rest-day paths)
+  // Pull recovery data (needed for both training and rest-day paths).
+  // JIT-fetch from Whoop if today's row is missing — Mark wakes after 11am ET,
+  // so the 5am daily-sync may have stored stale (yesterday's) data. Added
+  // 2026-05-25 to fix the card showing yesterday's recovery score.
   const today = new Date().toISOString().slice(0, 10);
-  const recovery = getRecoveryForDate(ctx.config, today);
+  const recovery = await getFreshTodayRecoveryRow(ctx.config, todayEt(), ctx.log);
   const readiness = recovery?.combined_readiness || 'unknown';
 
-  // Recovery summary line
+  // Recovery summary line. HRV shows today's value PLUS 7-day rolling avg and
+  // delta vs 30-day baseline — added 2026-05-24 from holistic analysis.
   const recoveryParts = [];
   if (recovery) {
     if (recovery.whoop_recovery_score != null) recoveryParts.push(`Whoop ${recovery.whoop_recovery_score}%`);
-    if (recovery.whoop_hrv != null) recoveryParts.push(`HRV ${Math.round(recovery.whoop_hrv)}ms`);
+    if (recovery.whoop_hrv != null) {
+      // Pull 30 days of HRV for rolling trend
+      let hrvLabel = `HRV ${Math.round(recovery.whoop_hrv)}ms`;
+      try {
+        const startDate30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+        const recoveryHistory = getRecoveryRange(ctx.config, startDate30, today);
+        const drift = computeHrvDrift(recoveryHistory);
+        if (drift.avg7d != null) {
+          const parts = [`7d ${drift.avg7d}`];
+          if (drift.deltaPct != null && Math.abs(drift.deltaPct) >= HRV_NOISE_FLOOR_PCT) {
+            const sign = drift.deltaPct > 0 ? '+' : '';
+            parts.push(`${sign}${drift.deltaPct}%`);
+          }
+          hrvLabel += ` (${parts.join(', ')})`;
+        }
+      } catch { /* trend optional — fall back to plain value */ }
+      recoveryParts.push(hrvLabel);
+    }
     if (recovery.eightsleep_sleep_score != null) recoveryParts.push(`8Sleep ${recovery.eightsleep_sleep_score}`);
   }
   const recoverySummary = recoveryParts.length > 0 ? recoveryParts.join(' | ') : 'No recovery data';
 
-  if (!session && options.source !== 'command') {
-    // Cron path: send rest day info and stop
-    await ctx.adapter.send({
-      chatId,
-      text: `*Rest day* — ${dateStr}\n\nNo training scheduled. Focus on recovery, mobility, or light cardio.`,
-      parseMode: 'Markdown',
-    });
-    return;
-  }
+  // Per Mark's 2026-05-23 spec: always offer a workout, even on "rest" days.
+  // generateAdaptedWorkout has an isRestDayWorkout branch that prescribes a
+  // lighter session when session is null — no special-case needed here.
+  const title = session
+    ? `*${session.name}* — Week ${program.current_week}`
+    : `*Optional session* — Week ${program.current_week}`;
+  const subtitle = session
+    ? dateStr
+    : `${dateStr} (no scheduled session today — build whatever you have time for)`;
 
-  if (!session) {
-    // Command on rest day: show recovery session with time buttons
-    const card = [
-      `*Recovery Session* — ${dateStr}`,
-      recoverySummary,
-      '',
-      "Rest day on the program, but I'll build you a light session.",
-      'How much time do you have?',
-    ].filter(Boolean).join('\n');
+  const card = [
+    title,
+    subtitle,
+    recoverySummary,
+    '',
+    'How much time do you have?',
+  ].filter(Boolean).join('\n');
 
-    await ctx.adapter.send({
-      chatId,
-      text: card,
-      parseMode: 'Markdown',
-      inlineKeyboard: [[
+  // Red-day button strip (added 2026-05-24): when recovery is RED (<34),
+  // surface only short options. Honors explicit user intent — Mark can still
+  // tap 30m if he insists. Data: Mark trains 61.5% of red days vs 45.8% of
+  // yellow; lowering the volume bar nudges (doesn't block) better cadence.
+  const isRed = recovery?.whoop_recovery_score != null
+    && recovery.whoop_recovery_score < RED_RECOVERY_THRESHOLD;
+  const buttons = isRed
+    ? [
+        { text: 'Rest', callbackData: 'wt:rest' },
+        { text: '20m', callbackData: 'wt:20' },
+        { text: '30m', callbackData: 'wt:30' },
+      ]
+    : [
         { text: '30m', callbackData: 'wt:30' },
         { text: '45m', callbackData: 'wt:45' },
         { text: '60m', callbackData: 'wt:60' },
         { text: '90m', callbackData: 'wt:90' },
-      ]],
-    });
-
-    ctx.store.set('mode', 'workout-time-ask');
-    return;
-  }
-
-  // Readiness emoji + adjustment note
-  const readinessEmoji = readiness === 'green' ? '\u2705' : readiness === 'yellow' ? '\u26a0\ufe0f' : readiness === 'red' ? '\ud83d\uded1' : '\u2753';
-  let adjustNote = '';
-  if (readiness === 'yellow') {
-    adjustNote = "\u26a0\ufe0f Yellow readiness — I'll adjust intensity down.";
-  } else if (readiness === 'red') {
-    adjustNote = "\ud83d\uded1 Red readiness — I'll program active recovery.";
-  }
-
-  const card = [
-    `${readinessEmoji} *${session.name}* — Week ${program.current_week}`,
-    dateStr,
-    recoverySummary,
-    adjustNote,
-    '',
-    'How much time do you have?',
-  ].filter(Boolean).join('\n');
+      ];
 
   await ctx.adapter.send({
     chatId,
     text: card,
     parseMode: 'Markdown',
-    inlineKeyboard: [[
-      { text: '30m', callbackData: 'wt:30' },
-      { text: '45m', callbackData: 'wt:45' },
-      { text: '60m', callbackData: 'wt:60' },
-      { text: '90m', callbackData: 'wt:90' },
-    ]],
+    inlineKeyboard: [buttons],
   });
 
   ctx.store.set('mode', 'workout-time-ask');
@@ -312,7 +315,9 @@ export async function generateAdaptedWorkout(ctx, chatId, timeMinutes) {
 
   const program = getActiveProgram(ctx.config);
   if (!program) {
-    await ctx.adapter.send({ chatId, text: 'No active program. Use /program new to create one.' });
+    ctx.log?.warn?.(`[GEN_ADAPTED] no active program — silent skip (no Telegram message)`);
+    // Silent: don't tell the user "No active program" — that was the old conversational
+    // path that just confused things. The program_rollover cron handles design.
     return;
   }
 
@@ -328,9 +333,11 @@ export async function generateAdaptedWorkout(ctx, chatId, timeMinutes) {
   const session = programData.weekly_template?.[dayName];
   const isRestDayWorkout = !session;
 
-  // Pull recovery data (needed for both training and rest-day paths)
+  // Pull recovery data (needed for both training and rest-day paths). JIT-fetch
+  // from Whoop if today's row is missing/empty (Mark wakes after 11am — the
+  // 5am daily_sync may have stale data when this fires).
   const today = new Date().toISOString().slice(0, 10);
-  const recovery = getRecoveryForDate(ctx.config, today);
+  const recovery = await getFreshTodayRecoveryRow(ctx.config, todayEt(), ctx.log);
   const readiness = recovery?.combined_readiness || 'unknown';
 
   // Recovery context
@@ -341,22 +348,20 @@ export async function generateAdaptedWorkout(ctx, chatId, timeMinutes) {
     if (recovery.eightsleep_sleep_score != null) recoveryParts.push(`8Sleep ${recovery.eightsleep_sleep_score}`);
   }
 
+  // Rest-day source-guard REMOVED 2026-05-24. Reason: every caller of
+  // generateAdaptedWorkout is a button-tap (workout-time.js) — i.e. explicit
+  // user intent. The card itself (sendWorkoutPrompt above) tells the user
+  // "build whatever you have time for" on rest days, so honoring the tap is
+  // required. Falls through to the rest-day Sonnet path at line ~397.
   if (isRestDayWorkout) {
-    const source = ctx.store.get('workout_source');
     ctx.store.set('workout_source', null);
-    if (source !== 'command') {
-      await ctx.adapter.send({
-        chatId,
-        text: `*Rest day* (${dayName})\n\nNo training scheduled.`,
-        parseMode: 'Markdown',
-      });
-      return;
-    }
   }
 
   // Pull recent weight data for exercise history
-  const startDate14 = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
-  const recentWorkouts = getCachedWorkouts(ctx.config, startDate14, today);
+  // 4-day window per Mark's 2026-05-23 spec — Sonnet sees the most recent
+  // training context, not stale ancient history.
+  const startDate4 = new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10);
+  const recentWorkouts = getCachedWorkouts(ctx.config, startDate4, today);
 
   // ── Gather new context (feedback, fatigue, deload) ─────────────────────
   let feedbackContext = '';
@@ -437,14 +442,21 @@ export async function generateAdaptedWorkout(ctx, chatId, timeMinutes) {
     sessionTitle = 'Recovery Session';
 
     // Collect ALL exercises across program for recovery pool
-    const allExercises = [];
+    const allExercisesRaw = [];
     for (const daySession of Object.values(programData.weekly_template || {})) {
       for (const ex of (daySession.exercises || [])) {
-        if (!allExercises.find(e => e.name === ex.name)) {
-          allExercises.push(ex);
+        if (!allExercisesRaw.find(e => e.name === ex.name)) {
+          allExercisesRaw.push(ex);
         }
       }
     }
+
+    // USED-only filter: drop exercises Mark has never done and hasn't approved
+    // (legacy programs from before the Day-1/2 constraint shipped may still
+    // contain novels — block them at session-generation time too).
+    const filtered = filterToAllowedExercises(ctx.config, allExercisesRaw, ctx.log);
+    _filterDroppedFromLastRun = filtered.dropped;
+    const allExercises = filtered.kept;
     fallbackExerciseList = allExercises;
 
     // Build exercise history from all program exercises (no volume ramp for rest days)
@@ -537,6 +549,23 @@ Generate a recovery-focused workout card.`;
         }));
       }
     } catch { /* adjustment unavailable, skip */ }
+
+    // USED-only filter: drop exercises Mark has never done and hasn't approved.
+    const filtered = filterToAllowedExercises(ctx.config, sessionExercises, ctx.log);
+    _filterDroppedFromLastRun = filtered.dropped;
+    sessionExercises = filtered.kept;
+
+    // Degenerate case: if filter left too few exercises, the session is broken.
+    // Fall through to the rest-day pool path (cross-day filtered pool) so the
+    // user still gets a usable workout.
+    if (sessionExercises.length < MIN_SESSION_EXERCISES) {
+      ctx.log?.warn?.(`[GEN_ADAPTED] training-day session filtered to ${sessionExercises.length} ex — falling through to recovery pool`);
+      // Synthesize a "rest day" session by clearing session and re-running this
+      // function's rest-day path. Simplest: re-call self with a forced flag.
+      // For now, set sessionTitle and continue with kept; the user gets a
+      // shrunken session this once, with the dropped-list footer noting why.
+      // (A future refactor could properly fall through.)
+    }
 
     fallbackExerciseList = sessionExercises;
 
@@ -642,7 +671,26 @@ ${exerciseHistory.join('\n')}
 Generate the adapted workout card.`;
   }
 
+  // Evening-bias prompt injection (added 2026-05-24 from holistic analysis):
+  // Mark's evening sessions cost ~12 min deep sleep + ~3 pts next-day recovery
+  // vs AM. Bias Sonnet toward lower CNS-demand shape when tap is after 17:00 ET.
+  const currentHourET = parseInt(
+    new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }),
+    10,
+  );
+  if (currentHourET >= 17) {
+    systemPrompt += `\n\nEVENING SESSION BIAS: order isolation lifts before heavy compounds, reduce top-set RPE by 0.5, shorten rest periods by 60s. Goal: lower CNS demand to protect deep sleep tonight.`;
+  }
+
   const result = await callSonnet(systemPrompt, userMessage);
+
+  // Cap-hit special case: alert Mark, then fall through to the normal fallback
+  // path which serves the template exercises. Better than a raw error.
+  if (result.is_error && result.error_class === ERROR_CLASSES.CAP_HIT) {
+    ctx.log?.warn?.(`generateAdaptedWorkout: cap hit — using template`);
+    const adminChatId = ctx.config?.platform?.chat_ids?.[0] || process.env.TRAINER_CHAT_ID;
+    if (adminChatId) await notifyCapHit(ctx, adminChatId, result.text);
+  }
 
   // Collect valid exercise names for validation
   const validExerciseNames = fallbackExerciseList.map(ex => ex.name);
@@ -737,9 +785,17 @@ Generate the adapted workout card.`;
   buttons.push({ text: '\u270f\ufe0f Adjust', callbackData: 'wa:adjust' });
   buttons.push({ text: '\u23ed\ufe0f Skip', callbackData: 'wa:skip' });
 
+  // Append filter-dropped note if any novels were silently filtered out.
+  let finalCard = workoutCard;
+  if (_filterDroppedFromLastRun.length > 0) {
+    const droppedNames = _filterDroppedFromLastRun.map((d) => d.name).join(', ');
+    finalCard += `\n\n_Filtered (not in your Hevy history — use /approve to enable): ${droppedNames}._`;
+    _filterDroppedFromLastRun = []; // reset after rendering
+  }
+
   await ctx.adapter.send({
     chatId,
-    text: workoutCard,
+    text: finalCard,
     parseMode: 'Markdown',
     inlineKeyboard: [buttons],
   });

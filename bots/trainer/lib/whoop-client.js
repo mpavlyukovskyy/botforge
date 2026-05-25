@@ -69,6 +69,7 @@ export async function refreshAccessToken(config, refreshToken) {
         refresh_token: refreshToken,
         client_id: getClientId(),
         client_secret: getClientSecret(),
+        scope: 'offline read:recovery read:sleep read:cycles read:profile read:workout',
       }),
     });
 

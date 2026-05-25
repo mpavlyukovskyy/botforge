@@ -1,0 +1,10 @@
+{
+  "name": "Recovery — Backup",
+  "focus": "Light volume, technique work",
+  "recovery_band": "red",
+  "exercises": [
+    {"template_id": "BE640BA0", "title": "Face Pull", "sets": 3, "reps": 15, "rpe": 6},
+    {"template_id": "422B08F1", "title": "Lateral Raise (Dumbbell)", "sets": 3, "reps": 15, "rpe": 6},
+    {"template_id": "93A552C6", "title": "Triceps Pushdown", "sets": 3, "reps": 15, "rpe": 6}
+  ]
+}

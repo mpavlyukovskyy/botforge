@@ -1,0 +1,11 @@
+{
+  "name": "Legs — Backup",
+  "focus": "Quads, hamstrings, glutes, calves",
+  "recovery_band": "green",
+  "exercises": [
+    {"template_id": "D04AC939", "title": "Squat (Barbell)", "sets": 4, "reps": 6, "rpe": 8},
+    {"template_id": "2B4B7310", "title": "Romanian Deadlift (Barbell)", "sets": 4, "reps": 8, "rpe": 8},
+    {"template_id": "C7973E0E", "title": "Leg Press (Machine)", "sets": 3, "reps": 10, "rpe": 8},
+    {"template_id": "A733CC5B", "title": "Walking Lunge (Dumbbell)", "sets": 3, "reps": 12, "rpe": 8}
+  ]
+}
