@@ -55,5 +55,22 @@ export default {
 
     await ctx.answerCallback('Acknowledged');
     ctx.log?.info?.(`[hali99/order-ack] order ${orderId} acked by ${who}`);
+
+    // Tell findlays-website so the re-ping cron stops chasing this order.
+    // Fire-and-forget: a failure here just means the customer will see one
+    // extra reminder — not a user-facing problem.
+    const base = process.env.FINDLAYS_WEBSITE_URL;
+    const secret = process.env.HALI99_SHARED_SECRET;
+    if (base && secret) {
+      fetch(`${base.replace(/\/$/, '')}/api/internal/order-acked`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, ackedBy: who }),
+      })
+        .then((r) => {
+          if (!r.ok) ctx.log?.warn?.(`[hali99/order-ack] notify-acked HTTP ${r.status} for ${orderId}`);
+        })
+        .catch((e) => ctx.log?.warn?.(`[hali99/order-ack] notify-acked failed for ${orderId}: ${e?.message || e}`));
+    }
   },
 };

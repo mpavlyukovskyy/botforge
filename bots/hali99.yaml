@@ -33,7 +33,13 @@ resilience:
     backoff: exponential
     transient_codes: [429, 502, 503]
 
-schedule: {}
+schedule:
+  # Re-ping unacknowledged P&D orders. Every 5 min the cron calls
+  # findlays-website which finds orders unacked >15 min and sends a
+  # reminder to the Findlays ops group.
+  reping_unacked:
+    cron: "*/5 * * * *"
+    timezone: UTC
 
 health:
   port: 8089
