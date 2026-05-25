@@ -47,6 +47,19 @@ async function apiPost(path, body) {
   return res.json();
 }
 
+async function apiPut(path, body) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'PUT',
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Hevy API PUT ${path} failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
 // ─── Workouts ───────────────────────────────────────────────────────────────
 
 /**
@@ -162,6 +175,34 @@ export async function getRoutines(page = 1, pageSize = 10) {
  */
 export async function createRoutine(routine) {
   return apiPost('/routines', { routine: { notes: 'Workout routine', folder_id: null, ...routine } });
+}
+
+/**
+ * Update an existing routine in place. Hevy requires the same payload shape as
+ * createRoutine (title + exercises + notes), but on the PUT endpoint.
+ * Read-only fields (id, folder_id, created_at, updated_at, index) must NOT be
+ * sent — they're inferred from the route param.
+ */
+export async function updateRoutine(routineId, routine) {
+  return apiPut(`/routines/${routineId}`, { routine });
+}
+
+// ─── Workout Events ─────────────────────────────────────────────────────
+
+/**
+ * Fetch workout events (updates/deletes) since a given ISO timestamp.
+ * Returns { page, page_count, events: [{ type, workout? } | { type, id, deleted_at? }] }
+ */
+export async function getWorkoutEvents(since, page = 1, pageSize = 10) {
+  return apiGet('/workouts/events', { since, page, pageSize });
+}
+
+/**
+ * Fetch a single workout by ID.
+ */
+export async function getWorkoutById(workoutId) {
+  const data = await apiGet(`/workouts/${workoutId}`);
+  return data.workout || data;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

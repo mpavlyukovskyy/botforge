@@ -1,10 +1,52 @@
 /**
  * Reactive deload detection — multi-signal composite score.
  *
- * Signals: RPE overshoot, exercise stalls, declining recovery, joint pain, fatigue escalation.
+ * Signals: RPE overshoot, exercise stalls, declining recovery, joint pain,
+ * fatigue escalation, HRV drift (post-2026-05-24 holistic-analysis finding).
+ *
  * Threshold adjusts based on mesocycle position (later weeks expect more fatigue).
  * Graduated response: soft deload (20-30% reduction) vs full deload (50%).
+ *
+ * Anti-patterns explicitly rejected (do NOT re-add):
+ *  - Strain → next-day recovery: confounded by reverse causation (high strain
+ *    only happens on already-fresh days). r=+0.018 in Mark's 142-day data.
+ *  - Streak length as fatigue signal: self-selected (Mark starts streaks when
+ *    he feels good); recovery RISES through streaks (regression to mean).
  */
+
+/**
+ * Compute a 7-day rolling HRV and its delta vs a 30-day baseline.
+ *
+ * @param {Array} recoveryRows - recovery_daily rows sorted by date ASC, must include whoop_hrv
+ * @returns {{avg7d: number|null, baseline30d: number|null, deltaPct: number|null}}
+ */
+export function computeHrvDrift(recoveryRows) {
+  if (!Array.isArray(recoveryRows) || recoveryRows.length === 0) {
+    return { avg7d: null, baseline30d: null, deltaPct: null };
+  }
+
+  const valid = recoveryRows.filter((r) => r.whoop_hrv != null && r.whoop_hrv > 0);
+  if (valid.length === 0) return { avg7d: null, baseline30d: null, deltaPct: null };
+
+  const sorted = valid.slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+  const last7 = sorted.slice(-7);
+  const last30 = sorted.slice(-30);
+
+  const avg = (rows) => rows.reduce((s, r) => s + r.whoop_hrv, 0) / rows.length;
+  const avg7d = last7.length > 0 ? avg(last7) : null;
+  const baseline30d = last30.length >= 14 ? avg(last30) : null;
+
+  let deltaPct = null;
+  if (avg7d != null && baseline30d != null && baseline30d > 0) {
+    deltaPct = ((avg7d - baseline30d) / baseline30d) * 100;
+  }
+
+  return {
+    avg7d: avg7d != null ? Math.round(avg7d) : null,
+    baseline30d: baseline30d != null ? Math.round(baseline30d) : null,
+    deltaPct: deltaPct != null ? Math.round(deltaPct * 10) / 10 : null,
+  };
+}
 
 /**
  * Compute a deload score from multiple fatigue signals.
@@ -55,6 +97,15 @@ export function computeDeloadScore(data) {
     f => f.fatigue_level === 'fatigued' || f.fatigue_level === 'exhausted'
   ).length;
   if (fatiguedCount >= 3) score += 20;
+
+  // Signal 6: HRV drift vs 30-day baseline (post-2026-05-24 finding).
+  // Mark's HRV dropped 9% Jan→May; mild cumulative fatigue marker.
+  // ≤ -10% adds 20pt, ≤ -5% adds 10pt.
+  const hrvDeltaPct = data.hrvDeltaPct;
+  if (typeof hrvDeltaPct === 'number') {
+    if (hrvDeltaPct <= -10) score += 20;
+    else if (hrvDeltaPct <= -5) score += 10;
+  }
 
   // Adjust threshold based on mesocycle position
   const weekProgress = totalWeeks > 0 ? currentWeek / totalWeeks : 0;

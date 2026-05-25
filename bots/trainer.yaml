@@ -1,45 +1,29 @@
 name: Trainer
-version: "1.0"
-description: AI personal trainer — periodized programs, recovery-aware workouts via Whoop + Eight Sleep, pushes to Hevy
+version: "2.0"
+description: Daily-workout-only trainer — Whoop + Hevy + Sonnet → workout pushed to Hevy. No conversational brain.
 
 platform:
   type: telegram
   token: ${TRAINER_BOT_TOKEN}
   chat_ids: ["${TRAINER_CHAT_ID}"]
   mode: polling
+  # Reverted to local-bot-api 2026-05-23 — cloud-direct switch hit a sticky
+  # cloud-side polling-slot conflict that wouldn't clear without a logOut +
+  # 10-min lockout. Local works; duplicates still need root cause investigation.
+  local_bot_api: http://localhost:8081
 
+# Minimal brain config (required by schema) — but never invoked in practice because
+# dm_mode: ignore drops free-text DMs before the brain. Slash commands and inline
+# button callbacks dispatch BEFORE reception rules, so they continue to work.
 brain:
   provider: claude
   model: claude-sonnet-4-6
-  system_prompt_file: trainer/prompts/trainer.md
-  tools:
-    - get_recovery_data
-    - get_recent_workouts
-    - get_exercise_history
-    - search_exercises
-    - get_current_program
-    - create_program
-    - get_goals
-    - set_goals
-    - push_workout_to_hevy
-    - adjust_workout
-    - skip_workout
-    - generate_timed_workout
+  tools: []
   temperature: 0
-  max_tokens: 4096
+  budget_usd_per_day: 1
 
-memory:
-  conversation_history:
-    enabled: true
-    ttl_days: 14
-    max_messages: 100
-  context_blocks:
-    - type: training_state
-      label: training_state
-    - type: recovery_state
-      label: recovery_state
-    - type: goal_summary
-      label: goal_summary
+
+  max_tokens: 1024
 
 resilience:
   circuit_breaker:
@@ -54,34 +38,47 @@ schedule:
   daily_sync:
     cron: "0 5 * * *"
     timezone: America/New_York
+  program_rollover:
+    cron: "55 6 * * *"
+    timezone: America/New_York
   morning_workout:
-    cron: "0 7 * * *"
+    cron: "0 12 * * *"
+    timezone: America/New_York
+  morning_workout_watchdog:
+    cron: "15 12 * * *"
     timezone: America/New_York
   token_refresh:
     cron: "*/5 * * * *"
     timezone: UTC
-  weekly_review:
-    cron: "0 20 * * 0"
-    timezone: America/New_York
-  monthly_check_in:
-    cron: "0 9 1 * *"
-    timezone: America/New_York
   conversation_cleanup:
     cron: "0 4 * * *"
     timezone: UTC
+  whoop_recovery_refresh_midday:
+    cron: "30 11 * * *"
+    timezone: America/New_York
+  whoop_recovery_refresh_evening:
+    cron: "0 18 * * *"
+    timezone: America/New_York
+  winddown_prompt:
+    cron: "30 23 * * *"
+    timezone: America/New_York
+  bedtime_prompt:
+    cron: "0 1 * * *"
+    timezone: America/New_York
 
 health:
   port: 8092
   path: /api/health
+  heartbeat:
+    poll_url: https://botforge-kuma.fly.dev/api/push/b69df749ca45e564b6684a32861d6e7d?status=up&msg=OK&ping=
+    poll_interval_ms: 60000
 
 behavior:
   reception:
-    dm_mode: always
+    dm_mode: ignore
     group_mode: ignore
-    respond_to_replies: true
-    respond_to_mentions: true
-    keywords: ["trainer"]
-    case_sensitive: false
+    respond_to_replies: false
+    respond_to_mentions: false
   response:
     typing_indicator: true
     markdown: true
@@ -89,7 +86,9 @@ behavior:
     max_message_length: 4000
   concurrency:
     chat_lock: true
-  continuity:
-    reply_context: true
 
 env_file: ../.env
+
+# T2.8 — workspace cap monitoring (cap_usd from ANTHROPIC_WORKSPACE_CAP_USD env)
+workspace_monitor:
+  enabled: true

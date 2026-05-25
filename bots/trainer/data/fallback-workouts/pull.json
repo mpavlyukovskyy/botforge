@@ -1,0 +1,13 @@
+{
+  "name": "Pull — Backup",
+  "focus": "Back, biceps, rear delts",
+  "recovery_band": "green",
+  "exercises": [
+    {"template_id": "55E6546F", "title": "Bent Over Row (Barbell)", "sets": 4, "reps": 8, "rpe": 8},
+    {"template_id": "1B2B1E7C", "title": "Pull Up", "sets": 4, "reps": 8, "rpe": 8},
+    {"template_id": "F1D60854", "title": "Seated Cable Row - Bar Grip", "sets": 3, "reps": 10, "rpe": 8},
+    {"template_id": "C732C341", "title": "Meadows Rows (Barbell)", "sets": 3, "reps": 10, "rpe": 8},
+    {"template_id": "BE640BA0", "title": "Face Pull", "sets": 3, "reps": 15, "rpe": 8},
+    {"template_id": "FAB6EB2F", "title": "Preacher Curl (Dumbbell)", "sets": 3, "reps": 10, "rpe": 8}
+  ]
+}

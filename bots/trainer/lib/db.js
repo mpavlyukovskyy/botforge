@@ -234,6 +234,20 @@ export function runMigrations(ctx) {
     );
   `);
 
+  // ── Add notified_at to workout_cache (for event-sync dedup) ─────────
+  try {
+    db.exec('ALTER TABLE workout_cache ADD COLUMN notified_at TEXT');
+  } catch { /* column already exists */ }
+
+  // ── Bot state (key-value store for sync cursors, etc.) ────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bot_state (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
   // ── Backfill volume_progression for active programs that lack it ────────
   const activePrograms = db.prepare("SELECT id, program_json FROM training_programs WHERE status = 'active'").all();
   for (const p of activePrograms) {
@@ -685,4 +699,35 @@ export function updateMuscleFatigue(config, date, muscleFatigueJson) {
   return db.prepare(
     'UPDATE recovery_daily SET muscle_fatigue_json = ? WHERE date = ?'
   ).run(typeof muscleFatigueJson === 'string' ? muscleFatigueJson : JSON.stringify(muscleFatigueJson), date);
+}
+
+// ─── Bot state helpers (key-value store) ─────────────────────────────────
+
+export function getState(config, key) {
+  const db = ensureDb(config);
+  const row = db.prepare('SELECT value FROM bot_state WHERE key = ?').get(key);
+  return row?.value ?? null;
+}
+
+export function setState(config, key, value) {
+  const db = ensureDb(config);
+  return db.prepare(`
+    INSERT OR REPLACE INTO bot_state (key, value, updated_at)
+    VALUES (?, ?, datetime('now'))
+  `).run(key, value);
+}
+
+// ─── Workout notification dedup helpers ──────────────────────────────────
+
+export function isWorkoutNotified(config, workoutId) {
+  const db = ensureDb(config);
+  const row = db.prepare('SELECT notified_at FROM workout_cache WHERE id = ? AND notified_at IS NOT NULL').get(workoutId);
+  return !!row;
+}
+
+export function markWorkoutNotified(config, workoutId) {
+  const db = ensureDb(config);
+  return db.prepare(
+    "UPDATE workout_cache SET notified_at = datetime('now') WHERE id = ?"
+  ).run(workoutId);
 }

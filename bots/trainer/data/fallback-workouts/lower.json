@@ -1,0 +1,11 @@
+{
+  "name": "Lower — Backup",
+  "focus": "Legs + posterior chain",
+  "recovery_band": "green",
+  "exercises": [
+    {"template_id": "C6272009", "title": "Deadlift (Barbell)", "sets": 4, "reps": 5, "rpe": 8},
+    {"template_id": "D04AC939", "title": "Squat (Barbell)", "sets": 3, "reps": 8, "rpe": 8},
+    {"template_id": "2B4B7310", "title": "Romanian Deadlift (Barbell)", "sets": 3, "reps": 10, "rpe": 8},
+    {"template_id": "C7973E0E", "title": "Leg Press (Machine)", "sets": 3, "reps": 12, "rpe": 8}
+  ]
+}
