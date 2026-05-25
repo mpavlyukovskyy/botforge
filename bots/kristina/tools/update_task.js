@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { getColumns, findColumnByName, updateItem, findTaskByIdPrefix, ensureDb } from '../lib/atlas-client.js';
+import { isAdmin } from '../lib/db.js';
 
 const updateTask = {
   name: 'update_task',
@@ -15,6 +16,12 @@ const updateTask = {
     const db = ensureDb(ctx.config);
     const task = findTaskByIdPrefix(ctx, args.item_id);
     if (!task) return `No task found matching ID "${args.item_id}".`;
+
+    // Deadline changes are Mark-only — non-admin users can still rename and
+    // re-assign, but only Mark sets/extends due dates.
+    if (args.deadline && !isAdmin(ctx)) {
+      return `Only Mark can change deadlines. Ask him to set "${task.title}" to ${args.deadline}.`;
+    }
 
     const spokId = task.spok_id;
     const updates = {};

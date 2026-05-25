@@ -12,6 +12,17 @@ import { mkdirSync } from 'node:fs';
 
 let _db;
 
+/**
+ * For tests only — closes the cached DB handle and clears it so the next
+ * ensureDb() opens a fresh DB. Production code should not call this.
+ */
+export function __resetDbForTests() {
+  if (_db) {
+    try { _db.close(); } catch {}
+    _db = undefined;
+  }
+}
+
 export function ensureDb(config) {
   if (!_db) {
     mkdirSync('data', { recursive: true });
@@ -302,6 +313,47 @@ export async function deleteItem(ctx, itemId) {
     return true;
   } catch (err) {
     ctx.log.error(`[atlas] Failed to delete item: ${err}`);
+    recordFailure();
+    return false;
+  }
+}
+
+// ─── Sync Deduction ─────────────────────────────────────────────────────────
+
+/**
+ * Post a deduction to Atlas (record_deduction tool + nudge_deductions cron).
+ *
+ * Atlas exposes a separate /api/sync/kristina-bot/deductions endpoint for
+ * these so they don't conflict with item-level PATCHes. Returns true if the
+ * deduction landed on Atlas, false otherwise. Local DB is the source of
+ * truth — Atlas is an additional consumer.
+ */
+export async function syncDeduction(ctx, deduction) {
+  if (isCircuitOpen()) return false;
+  try {
+    const { url, token } = getAtlasConfig(ctx);
+    const fullUrl = `${url}/api/sync/kristina-bot/deductions`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const resp = await fetch(fullUrl, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(deduction),
+      });
+      clearTimeout(timeout);
+      if (!resp.ok) throw new Error(`Sync deduction failed: ${resp.status}`);
+      recordSuccess();
+      return true;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err) {
+    ctx.log.error(`[atlas] Failed to sync deduction: ${err}`);
     recordFailure();
     return false;
   }

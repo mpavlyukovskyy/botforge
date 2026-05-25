@@ -1,5 +1,5 @@
 import { getItems, getColumns, findColumnByName } from '../lib/atlas-client.js';
-import { getRegisteredChat } from '../lib/db.js';
+import { getRegisteredChat, isAdmin } from '../lib/db.js';
 
 export default {
   command: 'filter',
@@ -19,10 +19,16 @@ export default {
       return;
     }
 
-    const registered = getRegisteredChat(ctx, ctx.chatId, ctx.userId);
-    const requester = registered?.requester_name;
     const items = await getItems(ctx, { columnId: col.id });
-    const filtered = items.filter(i => !i.requester || (requester && (i.requester === requester || i.assignee === requester)));
+
+    let filtered;
+    if (isAdmin(ctx)) {
+      filtered = items;
+    } else {
+      const registered = getRegisteredChat(ctx, ctx.chatId, ctx.userId);
+      const requester = registered?.requester_name;
+      filtered = items.filter(i => !i.requester || (requester && (i.requester === requester || i.assignee === requester)));
+    }
 
     if (filtered.length === 0) {
       await ctx.adapter.send({ chatId: ctx.chatId, text: `No items in ${col.name}.` });
