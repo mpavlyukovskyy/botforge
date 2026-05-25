@@ -1,0 +1,64 @@
+name: Hali99
+version: "0.1"
+description: Findlay's Drycleaners shop-floor notification bot — receives new online orders from CleanCloud webhook (via findlays-website fan-out), posts to Findlays ops Telegram group, handles Acknowledged button callbacks, and (future) escalates unacked orders.
+
+platform:
+  type: telegram
+  token: ${HALI99_BOT_TOKEN}
+  # Findlays ops group (-5181340999) for alerts; Mark's DM (381823289) for owner escalation.
+  chat_ids: ["-5181340999", "381823289"]
+  mode: polling
+  local_bot_api: ${TELEGRAM_API_URL:-https://api.telegram.org}
+
+brain:
+  provider: claude
+  model: claude-haiku-4-5-20251001
+  system_prompt_file: prompts/hali99.md
+  tools: []
+  temperature: 0
+  max_tokens: 1024
+  max_iterations: 2
+
+memory:
+  conversation_history:
+    enabled: false
+  context_blocks: []
+
+resilience:
+  circuit_breaker:
+    threshold: 5
+    reset_timeout_ms: 30000
+  retry:
+    max_attempts: 3
+    backoff: exponential
+    transient_codes: [429, 502, 503]
+
+schedule: {}
+
+health:
+  port: 8089
+  path: /api/health
+
+behavior:
+  reception:
+    # No conversational behavior — bot exists only to send alerts (from
+    # findlays-website) and handle inline-button callbacks.
+    dm_mode: ignore
+    group_mode: passive
+    respond_to_replies: false
+    respond_to_mentions: false
+    keywords: []
+    case_sensitive: false
+  response:
+    typing_indicator: false
+    markdown: true
+    markdown_fallback: true
+    max_message_length: 3000
+  concurrency:
+    chat_lock: false
+  continuity:
+    reply_context: false
+  access:
+    admin_users: ["${TELEGRAM_CHAT_ID}"]
+
+env_file: ../.env
