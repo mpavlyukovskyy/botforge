@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { getItems, getColumns, findColumnByName } from '../lib/atlas-client.js';
-import { getRegisteredChat } from '../lib/db.js';
+import { getRegisteredChat, isAdmin } from '../lib/db.js';
 
 const queryBoard = {
   name: 'query_board',
@@ -27,10 +27,20 @@ const queryBoard = {
 
     const items = await getItems(ctx, opts);
 
-    // Filter by requester (dynamic, based on registered chat)
-    const registered = getRegisteredChat({ config: ctx.config }, ctx.chatId, ctx.userId);
-    const requester = registered?.requester_name;
-    let filtered = items.filter(i => !i.requester || (requester && (i.requester === requester || i.assignee === requester)));
+    // Admin (Mark in DM) sees the full board. Otherwise filter by requester.
+    // Without the admin bypass, query_board returns only items with a NULL
+    // requester — which is what was hiding 13 of 16 OPEN tasks in the
+    // 2026-05-18 smoke test post-cutover.
+    let filtered;
+    if (isAdmin(ctx)) {
+      filtered = items;
+    } else {
+      const registered = getRegisteredChat({ config: ctx.config }, ctx.chatId, ctx.userId);
+      const requester = registered?.requester_name;
+      filtered = items.filter(i =>
+        !i.requester || (requester && (i.requester === requester || i.assignee === requester))
+      );
+    }
 
     // Filter by assignee client-side if requested
     if (args.assignee) {

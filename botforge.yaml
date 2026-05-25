@@ -9,6 +9,10 @@ bots:
     config: bots/kristina.yaml
     service: botforge-kristina
     port: 8087
+  hali99:
+    config: bots/hali99.yaml
+    service: botforge-hali99
+    port: 8089
   atlas:
     config: bots/atlas.yaml
     service: botforge-atlas
