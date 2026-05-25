@@ -28,6 +28,7 @@ import { askBrainCli } from './brain-cli.js';
 import { askGemini } from './brain-gemini.js';
 import { storeAccess } from './bot-store.js';
 import type { BotInstance, MessageProcessor } from './runtime.js';
+import { classifyError, renderError, shortRef, maybeNotifyAdmin } from './error-messages.js';
 
 /**
  * Load system prompt — inline string > file > default fallback.
@@ -312,8 +313,19 @@ export function createBrainProcessor(
         responseText = 'Unsupported brain provider.';
       }
     } catch (err) {
-      log.error(`Brain error: ${err}`);
-      responseText = "Sorry, I couldn't process that. Please try again.";
+      const errorClass = classifyError(err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const ref = shortRef();
+      log.error(`Brain error [class=${errorClass} ref=${ref}]: ${errMsg}`);
+      responseText = renderError(errorClass, { errorMessage: errMsg, ref });
+      void maybeNotifyAdmin({
+        errorClass,
+        errMsg,
+        botName: config.name,
+        adapter: inst.adapter,
+        store: inst.store,
+        log,
+      });
     }
 
     // Send response (via response-formatter if available)
