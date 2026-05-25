@@ -18,46 +18,11 @@ const TelegramPlatformSchema = z.object({
   local_bot_api: z.string().url().optional().describe('Local Bot API server URL for large files'),
 });
 
-const SlackPlatformSchema = z.object({
-  type: z.literal('slack'),
-  bot_token: z.string(),
-  app_token: z.string().optional(),
-  signing_secret: z.string(),
-  channels: z.array(z.string()).optional(),
-});
+// T3.1: Slack/Email/Web/Headless platform schemas were vaporware (no runtime).
+// Removed after confirming no bot YAML used them. Reintroduce per-platform
+// when there's a real adapter implementation.
 
-const EmailPlatformSchema = z.object({
-  type: z.literal('email'),
-  imap_host: z.string(),
-  imap_port: z.number().default(993),
-  imap_user: z.string(),
-  imap_password: z.string(),
-  smtp_host: z.string().optional(),
-  smtp_port: z.number().optional(),
-  smtp_user: z.string().optional(),
-  smtp_password: z.string().optional(),
-  folders: z.array(z.string()).default(['INBOX']),
-  idle: z.boolean().default(true),
-});
-
-const WebPlatformSchema = z.object({
-  type: z.literal('web'),
-  port: z.number(),
-  cors_origins: z.array(z.string()).optional(),
-  websocket: z.boolean().default(false),
-});
-
-const HeadlessPlatformSchema = z.object({
-  type: z.literal('headless'),
-});
-
-const PlatformSchema = z.discriminatedUnion('type', [
-  TelegramPlatformSchema,
-  SlackPlatformSchema,
-  EmailPlatformSchema,
-  WebPlatformSchema,
-  HeadlessPlatformSchema,
-]);
+const PlatformSchema = TelegramPlatformSchema;
 
 // ─── Brain (LLM Configuration) ──────────────────────────────────────────────
 
@@ -71,6 +36,7 @@ const ClaudeBrainSchema = z.object({
   max_tokens: z.number().positive().default(4096),
   max_iterations: z.number().positive().optional().describe('Max agentic turns (maps to SDK maxTurns)'),
   max_budget_usd: z.number().positive().optional().describe('Max cost per query in USD'),
+  budget_usd_per_day: z.number().positive().optional().describe('Per-day cumulative spend cap; refuse new calls when exceeded'),
 });
 
 const ClaudeCliBrainSchema = z.object({
@@ -82,6 +48,7 @@ const ClaudeCliBrainSchema = z.object({
   temperature: z.number().min(0).max(1).default(0),
   max_tokens: z.number().positive().default(4096),
   max_iterations: z.number().positive().optional().describe('Max tool-calling turns (default 5)'),
+  budget_usd_per_day: z.number().positive().optional().describe('Per-day cumulative spend cap'),
 });
 
 const GeminiBrainSchema = z.object({
@@ -149,6 +116,13 @@ const CronJobSchema = z.object({
   cron: z.string().describe('Cron expression (5 or 6 fields)'),
   timezone: z.string().default('UTC'),
   handler: z.string().optional().describe('Handler function name'),
+  /**
+   * When true, if the process crashed mid-handler the cron-scheduler skill
+   * will re-invoke the handler on next startup. Default false — most cron
+   * handlers send user-visible messages and a replay would duplicate them.
+   * Opt in per job only for handlers known to be idempotent.
+   */
+  replay_on_crash: z.boolean().default(false),
 });
 
 const ScheduleSchema = z.object({
@@ -168,10 +142,45 @@ const IntegrationSchema = z.object({
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 
+const HeartbeatSchema = z.object({
+  poll_url: z.string().optional().describe('Uptime Kuma push URL fired every poll_interval_ms'),
+  poll_interval_ms: z.number().positive().default(60_000),
+  cron_urls: z.record(z.string()).optional().describe('Per-cron push URLs keyed on cron job name'),
+});
+
 const HealthSchema = z.object({
   port: z.number(),
   path: z.string().default('/api/health'),
   management_api: z.boolean().default(true).describe('Enable /api/config, /api/logs, /api/restart'),
+  heartbeat: HeartbeatSchema.optional(),
+});
+
+const InboxSchema = z.object({
+  enabled: z.boolean().default(true),
+  processing_timeout_ms: z.number().positive().default(30_000),
+});
+
+const OutboxSchema = z.object({
+  enabled: z.boolean().default(true),
+  poll_interval_ms: z.number().positive().default(250),
+});
+
+const DlqSchema = z.object({
+  enabled: z.boolean().default(true),
+});
+
+const BackupSchema = z.object({
+  enabled: z.boolean().default(false),
+  target_host: z.string().optional(),
+  target_dir: z.string().optional(),
+  local_retention_days: z.number().positive().default(7),
+});
+
+const WorkspaceMonitorSchema = z.object({
+  enabled: z.boolean().default(false),
+  cap_usd: z.number().positive().optional().describe('Daily workspace cap; falls back to ANTHROPIC_WORKSPACE_CAP_USD env'),
+  assumed_workspace_share: z.number().positive().max(1).default(1),
+  admin_chat_id: z.string().optional(),
 });
 
 // ─── Tool Server ────────────────────────────────────────────────────────
@@ -182,19 +191,9 @@ const ToolServerSchema = z.object({
   auth_token: z.string().optional().describe('Bearer token for auth, supports ${ENV_VAR} interpolation'),
 });
 
-// ─── Communication ───────────────────────────────────────────────────────────
-
-const SubscriptionSchema = z.object({
-  source: z.string().describe('Source bot name'),
-  event: z.string().describe('Event type to subscribe to'),
-  handler: z.string().optional().describe('Handler function name'),
-});
-
-const CommunicationSchema = z.object({
-  team: z.string().nullable().default(null).describe('Team name for grouping'),
-  subscriptions: z.array(SubscriptionSchema).default([]),
-  webhook_port: z.number().optional().describe('Port for receiving inter-bot webhooks'),
-});
+// T3.1: CommunicationSchema + SubscriptionSchema removed — no inter-bot
+// webhook runtime ever existed. Bots that need to coordinate use the
+// Atlas/Spok API (Tier 4 ack).
 
 // ─── Behavior ────────────────────────────────────────────────────────────────
 
@@ -255,103 +254,23 @@ const AccessSchema = z.object({
   allowed_users: z.array(z.string()).default([]),
 });
 
-const GuardrailsSchema = z.object({
-  max_response_length: z.number().positive().default(4000),
-  max_tool_calls_per_turn: z.number().positive().default(5),
-  blocked_topics: z.array(z.string()).default([]),
-  pii_patterns: z.array(z.string()).default([]),
-  pii_action: z.enum(['block', 'redact']).default('block'),
-  approval_required_tools: z.array(z.string()).default([]),
-});
-
-const EscalationSchema = z.object({
-  enabled: z.boolean().default(false),
-  trigger_phrases: z.array(z.string()).default([]),
-  auto_escalate_after_failures: z.number().nonnegative().default(3),
-  notify_channel: z.string().default(''),
-  escalation_message: z.string().default('Connecting you with a team member...'),
-  pause_bot_on_escalation: z.boolean().default(true),
-});
-
-const BusinessHoursSchema = z.object({
-  timezone: z.string().default('UTC'),
-  windows: z.array(z.string()).default([]),
-});
-
-const AvailabilitySchema = z.object({
-  business_hours: BusinessHoursSchema.optional(),
-  after_hours_action: z.enum(['auto_reply', 'normal']).default('normal'),
-  after_hours_message: z.string().default(''),
-});
-
-const OnboardingSchema = z.object({
-  welcome_message: z.string().default(''),
-  help_text: z.string().default(''),
-  suggested_actions: z.array(z.string()).default([]),
-  welcome_once: z.boolean().default(true),
-});
-
-const WebhooksSchema = z.object({
-  on_message_url: z.string().default(''),
-  on_error_url: z.string().default(''),
-  on_escalation_url: z.string().default(''),
-  include_message_content: z.boolean().default(false),
-  webhook_secret: z.string().default(''),
-  webhook_timeout_ms: z.number().positive().default(5000),
-});
-
-const I18nSchema = z.object({
-  default_language: z.string().default('en'),
-  supported_languages: z.array(z.string()).default(['en']),
-  prompt_overrides: z.record(z.string()).default({}),
-  unsupported_action: z.string().default('default'),
-  language_fallback_note: z.string().default(''),
-});
-
-const FallbackSchema = z.object({
-  error_message: z.string().default("I'm having trouble right now. Please try again."),
-  circuit_open_message: z.string().default("I'm temporarily unavailable."),
-  retry_on_error: z.boolean().default(true),
-  static_fallbacks: z.record(z.string()).default({}),
-  notify_admin_on_error: z.boolean().default(false),
-});
+// T3.1: GuardrailsSchema, EscalationSchema, AvailabilitySchema,
+// OnboardingSchema, WebhooksSchema, I18nSchema, FallbackSchema were
+// 'Phase D' fields with no runtime enforcement. Removed.
 
 const BehaviorSchema = z.object({
-  // Core (Phases A-C: full runtime enforcement)
   reception: ReceptionSchema.optional(),
   message_types: MessageTypesSchema.optional(),
   response: ResponseBehaviorSchema.optional(),
   concurrency: ConcurrencySchema.optional(),
   continuity: ContinuitySchema.optional(),
   startup: StartupSchema.optional(),
-  // Product (Phase D: schema validates, runtime warns "not enforced")
   access: AccessSchema.optional(),
-  guardrails: GuardrailsSchema.optional(),
-  escalation: EscalationSchema.optional(),
-  availability: AvailabilitySchema.optional(),
-  onboarding: OnboardingSchema.optional(),
-  webhooks: WebhooksSchema.optional(),
-  i18n: I18nSchema.optional(),
-  fallback: FallbackSchema.optional(),
 });
 
-// ─── Pipeline ────────────────────────────────────────────────────────────────
-
-const PipelineStepSchema = z.object({
-  name: z.string(),
-  type: z.enum(['llm', 'transform', 'external']),
-  provider: z.string().optional(),
-  model: z.string().optional(),
-  handler: z.string().optional(),
-  input: z.string().optional().describe('Input mapping'),
-  output: z.string().optional().describe('Output mapping'),
-});
-
-const PipelineSchema = z.object({
-  name: z.string(),
-  trigger: z.string().describe('What triggers this pipeline'),
-  steps: z.array(PipelineStepSchema),
-});
+// T3.1: PipelineSchema / PipelineStepSchema removed — the runtime never
+// implemented pipelines; babushka's standalone codebase manages its own
+// audio pipeline outside the framework.
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
 
@@ -384,9 +303,14 @@ export const BotConfigSchema = z.object({
   integrations: z.record(IntegrationSchema).optional(),
   health: HealthSchema.optional(),
   tool_server: ToolServerSchema.optional(),
-  communication: CommunicationSchema.optional(),
   behavior: BehaviorSchema.optional(),
-  pipelines: z.array(PipelineSchema).optional(),
+
+  // Tier 2 skills — opt-in / opt-out via these blocks.
+  inbox: InboxSchema.optional(),
+  outbox: OutboxSchema.optional(),
+  dlq: DlqSchema.optional(),
+  backup: BackupSchema.optional(),
+  workspace_monitor: WorkspaceMonitorSchema.optional(),
 
   tool_definitions: z.array(ToolDefinitionSchema).optional(),
 
@@ -398,10 +322,6 @@ export const BotConfigSchema = z.object({
 export type BotConfig = z.infer<typeof BotConfigSchema>;
 export type Platform = z.infer<typeof PlatformSchema>;
 export type TelegramPlatform = z.infer<typeof TelegramPlatformSchema>;
-export type SlackPlatform = z.infer<typeof SlackPlatformSchema>;
-export type EmailPlatform = z.infer<typeof EmailPlatformSchema>;
-export type WebPlatform = z.infer<typeof WebPlatformSchema>;
-export type HeadlessPlatform = z.infer<typeof HeadlessPlatformSchema>;
 export type Brain = z.infer<typeof BrainSchema>;
 export type ClaudeBrain = z.infer<typeof ClaudeBrainSchema>;
 export type ClaudeCliBrain = z.infer<typeof ClaudeCliBrainSchema>;
@@ -417,8 +337,6 @@ export type CronJob = z.infer<typeof CronJobSchema>;
 export type Integration = z.infer<typeof IntegrationSchema>;
 export type Health = z.infer<typeof HealthSchema>;
 export type ToolServer = z.infer<typeof ToolServerSchema>;
-export type Communication = z.infer<typeof CommunicationSchema>;
-export type Subscription = z.infer<typeof SubscriptionSchema>;
 export type Behavior = z.infer<typeof BehaviorSchema>;
 export type Reception = z.infer<typeof ReceptionSchema>;
 export type MessageTypes = z.infer<typeof MessageTypesSchema>;
@@ -426,6 +344,4 @@ export type ResponseBehavior = z.infer<typeof ResponseBehaviorSchema>;
 export type Concurrency = z.infer<typeof ConcurrencySchema>;
 export type Continuity = z.infer<typeof ContinuitySchema>;
 export type Startup = z.infer<typeof StartupSchema>;
-export type Pipeline = z.infer<typeof PipelineSchema>;
-export type PipelineStep = z.infer<typeof PipelineStepSchema>;
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;

@@ -14,8 +14,9 @@ import { Command } from 'commander';
 import { loadConfig } from '@botforge/core';
 import { startBot } from '@botforge/core';
 import { createTelegramAdapter } from '@botforge/adapter-telegram';
+import { SqliteStorage } from '@botforge/storage-sqlite';
 import { resolve, dirname, join } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { deploy } from './commands/deploy.js';
 import { rollback } from './commands/rollback.js';
 import { status } from './commands/status.js';
@@ -23,6 +24,8 @@ import { logs } from './commands/logs.js';
 import { systemd } from './commands/systemd.js';
 import { build } from './commands/build.js';
 import { create } from './commands/create.js';
+import { fleetStatus } from './commands/fleet-status.js';
+import { canaryGc } from './commands/canary-gc.js';
 
 const program = new Command();
 
@@ -68,6 +71,27 @@ program
         return;
       }
 
+      // T3.6: open a shared SQLite handle so skills that need persistence
+      // (e.g. cron-scheduler's in_flight CAS) can use ctx.db. Skills that
+      // own their own SqliteStorage handles (token-tracker, conv-history)
+      // continue against the same file — SQLite WAL handles concurrent
+      // connections cleanly.
+      const config = loadConfig(absPath);
+      mkdirSync('data', { recursive: true });
+      const sharedStorage = new SqliteStorage({
+        path: `data/${config.name}.db`,
+        migrations: [],
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+      });
+      // DatabaseLike wrapper — proxies run() to prepare().run() so callers
+      // get a one-shot 'just execute this SQL' surface without managing
+      // prepared statements.
+      const dbWrapper = {
+        run: (sql: string, ...params: unknown[]) => sharedStorage.db.prepare(sql).run(...(params as never[])),
+        prepare: (sql: string) => sharedStorage.db.prepare(sql),
+        close: () => sharedStorage.close(),
+      };
+
       const instance = await startBot(absPath, {
         createAdapter: (config, log) => {
           switch (config.platform.type) {
@@ -80,6 +104,7 @@ program
         loadSkill,
         toolsDir,
         echo: opts.echo,
+        db: dbWrapper,
       });
 
       console.log(`Bot "${instance.config.name}" is running. Press Ctrl+C to stop.`);
@@ -126,12 +151,29 @@ program
   .description('Show fleet status by querying health endpoints')
   .action(() => status());
 
+// ─── fleet-status ────────────────────────────────────────────────────────────
+
+program
+  .command('fleet-status')
+  .description('SSH into the fleet host and report framework SHA drift + canary state across bots')
+  .option('--json', 'Emit machine-readable JSON instead of a human-readable table')
+  .action((opts: { json?: boolean }) => fleetStatus(opts));
+
+// ─── canary-gc ───────────────────────────────────────────────────────────────
+
+program
+  .command('canary-gc')
+  .description('List pinned-framework dirs on the server; clean up orphans')
+  .option('--force', 'Actually delete orphans (default: dry-run)')
+  .action((opts: { force?: boolean }) => canaryGc(opts));
+
 // ─── deploy ──────────────────────────────────────────────────────────────────
 
 program
   .command('deploy <bot>')
   .description('Build, upload, and deploy a bot to the fleet server')
-  .action((bot: string) => deploy(bot));
+  .option('--framework-version <sha>', 'Pin this bot to a specific framework SHA via systemd drop-in')
+  .action((bot: string, opts: { frameworkVersion?: string }) => deploy(bot, { frameworkVersion: opts.frameworkVersion }));
 
 // ─── rollback ────────────────────────────────────────────────────────────────
 
@@ -155,7 +197,8 @@ program
 program
   .command('build <bot>')
   .description('Build a bot for deployment')
-  .action((bot: string) => build(bot));
+  .option('--framework-version <sha>', 'Pin the framework to a specific git SHA (builds in a worktree)')
+  .action((bot: string, opts: { frameworkVersion?: string }) => build(bot, { frameworkVersion: opts.frameworkVersion }));
 
 // ─── systemd ─────────────────────────────────────────────────────────────────
 

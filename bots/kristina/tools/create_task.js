@@ -90,26 +90,34 @@ const createTask = {
     }
 
     // Store photo attachment if files present
-    if (ctx.files && ctx.files.length > 0) {
+    if (ctx.files && ctx.files.length > 0 && ctx.files[0]?.length > 0) {
       try {
-        const photoData = ctx.files[0].toString('base64');
+        const buf = ctx.files[0];
+        const meta = ctx.fileMetadata?.[0] ?? {};
+        const mimeType = meta.mimeType && meta.mimeType.startsWith('image/') ? meta.mimeType : 'image/jpeg';
+        const ext = mimeType.split('/')[1]?.split(';')[0] || 'jpg';
+        const filename = meta.fileName || `task-${taskId.slice(0, 8)}.${ext}`;
+        const photoData = buf.toString('base64');
         let synced = false;
         if (atlasResult) {
           const { syncAttachment } = await import('../lib/atlas-client.js');
           synced = await syncAttachment(ctx, atlasResult.atlasId, {
             type: 'IMAGE',
             imageBase64: photoData,
-            filename: 'photo.jpg',
-            mimeType: 'image/jpeg',
+            filename,
+            mimeType,
           });
         }
         // Persist locally for retry
         db.prepare(
           'INSERT INTO task_attachments (task_id, type, filename, mime_type, image_base64, synced_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run(taskId, 'IMAGE', 'photo.jpg', 'image/jpeg', photoData, synced ? new Date().toISOString() : null);
+        ).run(taskId, 'IMAGE', filename, mimeType, photoData, synced ? new Date().toISOString() : null);
+        ctx.log.info(`Photo attached: filename=${filename} mime=${mimeType} bytes=${buf.length} synced=${synced}`);
       } catch (err) {
         ctx.log.warn(`Failed to sync photo attachment: ${err}`);
       }
+    } else if (ctx.files && ctx.files.length > 0) {
+      ctx.log.warn('Skipping photo attachment: empty buffer');
     }
 
     // Extract and attach URLs from title

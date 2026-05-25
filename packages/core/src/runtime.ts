@@ -4,21 +4,22 @@
  * Lifecycle: loadConfig → createAdapter → deriveBotDir → loadModules → initSkills → wireBrain → start
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { loadConfig, type LoadConfigOptions } from './config.js';
 import { createLogger, type Logger, type Skill, type SkillContext, type DatabaseLike } from './skill.js';
 import type { PlatformAdapter, IncomingMessage } from './adapter.js';
 import type { BotConfig } from './schema.js';
-import { askBrain, type BrainResponse } from './brain.js';
-import { askBrainCli } from './brain-cli.js';
-import { askGemini } from './brain-gemini.js';
-import { ToolRegistry, loadToolsFromDir, type ToolContext } from './tool-registry.js';
+import { ToolRegistry, loadToolsFromDir } from './tool-registry.js';
 import { loadModulesFromDir } from './module-loader.js';
 import { CommandRegistry, parseCommand, type ModuleContext, type CommandHandler } from './command-registry.js';
 import { CallbackRegistry, type CallbackActionHandler, type CallbackContext } from './callback-registry.js';
 import { withChatLock } from './chat-lock.js';
 import { shouldAllow } from './rate-limiter.js';
+import { STORE_KEYS, type BotStore } from './bot-store.js';
+import { loadSkills, initSkills } from './skill-loader.js';
+import { shouldProcessMessage } from './reception.js';
+import { createBrainProcessor, createEchoProcessor, loadSystemPrompt, buildModuleContext } from './brain-processor.js';
 
 export type AdapterFactory = (config: BotConfig, log: Logger) => PlatformAdapter;
 export type SkillFactory = (name: string) => Promise<Skill>;
@@ -52,7 +53,7 @@ export interface BotInstance {
   commandRegistry: CommandRegistry;
   callbackRegistry: CallbackRegistry;
   /** Shared key-value store for cross-module state */
-  store: Map<string, unknown>;
+  store: BotStore;
   /** Process an incoming message through the brain */
   processMessage?: MessageProcessor;
   /** Bot's Telegram username (auto-detected or from config) */
@@ -84,47 +85,6 @@ export interface BotForgeOptions {
   toolsDir?: string;
   /** Force echo mode — don't use brain, just echo messages */
   echo?: boolean;
-}
-
-// ─── Skill auto-detection ───────────────────────────────────────────────────
-
-const SKILL_INIT_ORDER = [
-  'conversation-history',
-  'event-bus',
-  'token-tracker',
-  'context-builder',
-  'circuit-breaker',
-  'response-formatter',
-  'reply-context',
-  'pending-questions',
-  'cron-scheduler',
-  'daily-digest',
-  'health-server',
-  'tool-server',
-] as const;
-
-function detectSkills(config: BotConfig): string[] {
-  const detected = new Set<string>();
-
-  if (config.memory?.conversation_history?.enabled) detected.add('conversation-history');
-  if (config.brain?.provider === 'claude' || config.brain?.provider === 'claude-cli') detected.add('token-tracker');
-  if (config.memory?.context_blocks?.length) detected.add('context-builder');
-  if (config.resilience?.circuit_breaker) detected.add('circuit-breaker');
-  if (config.behavior?.reception?.keywords?.length
-      || config.behavior?.reception?.patterns?.length) {
-    detected.add('passive-detection');
-  }
-  if (config.behavior?.response) detected.add('response-formatter');
-  if (config.behavior?.continuity?.reply_context) detected.add('reply-context');
-  if (config.behavior?.continuity?.pending_questions) detected.add('pending-questions');
-  if (config.schedule) detected.add('cron-scheduler');
-  if (config.schedule) detected.add('event-bus');
-  if (config.schedule?.daily_digest) detected.add('daily-digest');
-  if (config.health) detected.add('health-server');
-  if (config.tool_server) detected.add('tool-server');
-
-  // Return in init order
-  return SKILL_INIT_ORDER.filter(name => detected.has(name));
 }
 
 // ─── Bot directory derivation ───────────────────────────────────────────────
@@ -178,330 +138,6 @@ function validateCronHandler(mod: unknown, _filePath: string): CronHandler | nul
   return null;
 }
 
-// ─── System prompt loader ───────────────────────────────────────────────────
-
-function loadSystemPrompt(config: BotConfig, configDir: string): string {
-  if (config.brain.system_prompt) {
-    return config.brain.system_prompt;
-  }
-
-  if (config.brain.system_prompt_file) {
-    const promptPath = resolve(configDir, config.brain.system_prompt_file);
-    if (existsSync(promptPath)) {
-      return readFileSync(promptPath, 'utf-8');
-    }
-    throw new Error(`System prompt file not found: ${promptPath}`);
-  }
-
-  return `You are ${config.name}, an AI assistant. Be helpful and concise.`;
-}
-
-// ─── Build ModuleContext helper ──────────────────────────────────────────────
-
-function buildModuleContext(
-  message: IncomingMessage,
-  instance: BotInstance,
-): ModuleContext {
-  return {
-    chatId: message.chatId,
-    userId: message.userId,
-    userName: message.userName,
-    db: instance.db,
-    config: instance.config,
-    adapter: instance.adapter,
-    log: instance.log,
-    store: instance.store,
-  };
-}
-
-// ─── Default brain message processor ────────────────────────────────────────
-
-function createBrainProcessor(
-  config: BotConfig,
-  systemPrompt: string,
-  toolRegistry: ToolRegistry,
-  instance: BotInstance,
-): MessageProcessor {
-  const { log, db } = instance;
-
-  return async (message: IncomingMessage, inst: BotInstance) => {
-    // Allow media messages with captions through (text is the caption)
-    if (!message.text && !message.file) {
-      log.debug(`Non-text message type "${message.type}" passed type filter; media handling not yet implemented`);
-      return;
-    }
-
-    // Pre-brain media download
-    let files: Buffer[] | undefined;
-    let fileMetadata: ToolContext['fileMetadata'];
-    if (message.file?.fileId && inst.adapter.downloadFile) {
-      try {
-        const buffer = await inst.adapter.downloadFile(message.file.fileId);
-        files = [buffer];
-        fileMetadata = [{
-          fileName: message.file.fileName,
-          mimeType: message.file.mimeType,
-          fileSize: message.file.fileSize,
-        }];
-      } catch (err) {
-        log.warn(`Failed to download file ${message.file.fileId}: ${err}`);
-      }
-    }
-
-    log.info(`Brain: type=${message.type} file=${!!message.file} downloaded=${files?.length ?? 0}`);
-
-    // Build tool context for this message
-    const toolCtx: ToolContext = {
-      chatId: message.chatId,
-      userId: message.userId,
-      userName: message.userName,
-      db,
-      config: inst.config,
-      adapter: inst.adapter,
-      log,
-      store: inst.store,
-      files,
-      fileMetadata,
-    };
-
-    const brainTools = toolRegistry.toBrainTools(toolCtx);
-
-    // Collect context blocks from context-builder skill if available
-    const contextBlocks: string[] = [];
-    const contextBuilder = inst.skills.get('context-builder');
-    if (contextBuilder && 'getContextBlocks' in contextBuilder) {
-      const blocks = await (contextBuilder as any).getContextBlocks(message.chatId);
-      if (Array.isArray(blocks)) {
-        contextBlocks.push(...blocks);
-      }
-    }
-
-    // Inject bot-directory context builders
-    if (inst.contextBuilders.length > 0) {
-      const moduleCtx = buildModuleContext(message, inst);
-      for (const cb of inst.contextBuilders) {
-        try {
-          const block = await cb.build(moduleCtx);
-          if (block) contextBlocks.push(block);
-        } catch (err) {
-          log.warn(`Context builder "${cb.type}" failed: ${err}`);
-        }
-      }
-    }
-
-    // Reply context injection
-    const replyCtxSkill = inst.skills.get('reply-context');
-    if (replyCtxSkill && 'getContextBlock' in replyCtxSkill) {
-      const replyBlock = (replyCtxSkill as any).getContextBlock(message);
-      if (replyBlock) contextBlocks.push(replyBlock);
-    }
-
-    // Pending questions context injection
-    const pendingQSkill = inst.skills.get('pending-questions');
-    if (pendingQSkill && 'getContextBlock' in pendingQSkill) {
-      const pendingBlock = (pendingQSkill as any).getContextBlock(message.chatId);
-      if (pendingBlock) contextBlocks.push(pendingBlock);
-    }
-
-    // Get conversation history from conversation-history skill
-    let conversationHistory: string | undefined;
-    const historySkill = inst.skills.get('conversation-history');
-    if (historySkill && 'formatHistory' in historySkill) {
-      // Check conversation timeout
-      const timeout = config.behavior?.reception?.conversation_timeout_min;
-      if (timeout && timeout > 0 && 'getLastMessageTime' in historySkill) {
-        const lastTime = (historySkill as any).getLastMessageTime(message.chatId);
-        if (lastTime && (Date.now() - lastTime.getTime()) > timeout * 60 * 1000) {
-          log.info(`Conversation timeout: ${timeout}min idle, starting fresh for ${message.chatId}`);
-          // Skip history injection
-        } else {
-          conversationHistory = await (historySkill as any).formatHistory(message.chatId);
-        }
-      } else {
-        conversationHistory = await (historySkill as any).formatHistory(message.chatId);
-      }
-    }
-
-    let responseText: string;
-    let brainResponse: BrainResponse | undefined;
-
-    // Clear any previous post-response actions
-    inst.store.delete('postResponse');
-
-    // Build userMessage with file metadata for document attachments
-    let userMessage = message.text ?? '';
-    if (message.type === 'document' && files?.length) {
-      const fn = message.file?.fileName || 'unnamed file';
-      const readDocTool = brainTools.find(t => t.name === 'read_document');
-      if (readDocTool) {
-        try {
-          log.info(`Pre-parsing document: ${fn}`);
-          const result = await readDocTool.execute({});
-          const parsed = result.content.map(c => c.text).join('\n');
-          if (!result.isError) {
-            const truncated = parsed.length > 15000
-              ? parsed.slice(0, 15000) + '\n\n[...truncated — call read_document for full contents]'
-              : parsed;
-            userMessage += `\n\n[Document: "${fn}" — parsed contents below]\n${truncated}`;
-            log.info(`Document pre-parsed OK: ${parsed.length} chars`);
-          } else {
-            log.warn(`Document pre-parse error: ${parsed.slice(0, 200)}`);
-            userMessage += `\n\n[Attached document: "${fn}" — parse failed. Use read_document tool to retry.]`;
-          }
-        } catch (err) {
-          log.warn(`Document pre-parse exception: ${err}`);
-          userMessage += `\n\n[Attached document: "${fn}". Use read_document tool to extract contents.]`;
-        }
-      } else {
-        const mt = message.file?.mimeType || 'unknown type';
-        const sz = message.file?.fileSize ? `${Math.round(message.file.fileSize / 1024)} KB` : 'unknown size';
-        userMessage += `\n\n[Attached document: "${fn}" (${mt}, ${sz}). Use the read_document tool to extract its contents.]`;
-      }
-    }
-    if (!userMessage) userMessage = '[media message]';
-    log.info(`UserMessage (${userMessage.length} chars): ${userMessage.slice(0, 200)}`);
-
-    try {
-      if (config.brain.provider === 'claude') {
-        const brainPromise = askBrain(
-          {
-            name: config.name,
-            model: config.brain.model,
-            systemPrompt,
-            maxTurns: config.brain.max_iterations ?? 5,
-            maxBudgetUsd: config.brain.max_budget_usd ?? 1.0,
-          },
-          {
-            userMessage,
-            tools: brainTools,
-            conversationHistory,
-            contextBlocks,
-          },
-          log,
-        );
-        const BRAIN_TIMEOUT_MS = 120_000; // 2 minutes
-        brainResponse = await Promise.race([
-          brainPromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Brain query timed out after ${BRAIN_TIMEOUT_MS / 1000}s`)), BRAIN_TIMEOUT_MS)
-          ),
-        ]);
-        responseText = brainResponse.text;
-      } else if (config.brain.provider === 'claude-cli') {
-        const cliPromise = askBrainCli(
-          {
-            name: config.name,
-            model: config.brain.model,
-            systemPrompt,
-            maxTurns: config.brain.max_iterations ?? 5,
-          },
-          {
-            userMessage,
-            tools: brainTools,
-            conversationHistory,
-            contextBlocks,
-          },
-        );
-        const BRAIN_TIMEOUT_MS = 120_000; // 2 minutes
-        brainResponse = await Promise.race([
-          cliPromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Brain CLI query timed out after ${BRAIN_TIMEOUT_MS / 1000}s`)), BRAIN_TIMEOUT_MS)
-          ),
-        ]);
-        responseText = brainResponse.text;
-      } else if (config.brain.provider === 'gemini') {
-        // Gemini API key from env
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-          throw new Error('GEMINI_API_KEY environment variable not set');
-        }
-
-        const geminiResponse = await askGemini(
-          {
-            model: config.brain.model,
-            apiKey,
-            systemPrompt,
-            temperature: config.brain.temperature,
-            maxTokens: config.brain.max_tokens,
-          },
-          {
-            userMessage,
-            contextBlocks,
-          },
-        );
-        responseText = geminiResponse.text;
-      } else {
-        responseText = 'Unsupported brain provider.';
-      }
-    } catch (err) {
-      log.error(`Brain error: ${err}`);
-      responseText = "Sorry, I couldn't process that. Please try again.";
-    }
-
-    // Send response (via response-formatter if available)
-    let sentMessageId: string | undefined;
-    if (responseText) {
-      const respFormatter = inst.skills.get('response-formatter');
-      if (respFormatter && 'formatAndSend' in respFormatter) {
-        sentMessageId = await (respFormatter as any).formatAndSend(message.chatId, responseText);
-      } else {
-        sentMessageId = await inst.adapter.send({
-          chatId: message.chatId,
-          text: responseText,
-        });
-      }
-    }
-
-    // Post-response hook: attach inline keyboards from tool results
-    const postResponse = inst.store.get('postResponse') as { buttons?: any[][] } | undefined;
-    if (postResponse?.buttons && sentMessageId && inst.adapter.edit) {
-      try {
-        await inst.adapter.edit(sentMessageId, message.chatId, {
-          text: responseText,
-          inlineKeyboard: postResponse.buttons,
-        });
-      } catch (err) {
-        log.warn(`Post-response edit failed: ${err}`);
-      }
-      inst.store.delete('postResponse');
-    }
-
-    // Store conversation in history (if skill available)
-    if (historySkill && 'addMessage' in historySkill) {
-      await (historySkill as any).addMessage(message.chatId, 'user', message.text ?? '[media]');
-      if (responseText) {
-        await (historySkill as any).addMessage(message.chatId, 'assistant', responseText);
-      }
-    }
-
-    // Record pending questions from bot response
-    if (pendingQSkill && 'recordQuestion' in pendingQSkill && responseText) {
-      (pendingQSkill as any).recordQuestion(message.chatId, responseText);
-    }
-
-    // Record token usage (if skill available)
-    const tokenTracker = inst.skills.get('token-tracker');
-    if (tokenTracker && 'recordUsage' in tokenTracker && brainResponse) {
-      await (tokenTracker as any).recordUsage(
-        config.brain.model,
-        brainResponse.usage.costUsd,
-      );
-    }
-  };
-}
-
-// ─── Default echo processor ─────────────────────────────────────────────────
-
-function createEchoProcessor(): MessageProcessor {
-  return async (message: IncomingMessage, instance: BotInstance) => {
-    const responseText = `[${instance.config.name}] Received: ${message.text ?? '[non-text message]'}`;
-    await instance.adapter.send({
-      chatId: message.chatId,
-      text: responseText,
-    });
-  };
-}
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
@@ -527,7 +163,7 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
   }
 
   // 4. Create shared store
-  const store = new Map<string, unknown>();
+  const store: BotStore = new Map<string, unknown>();
 
   // 5. Load tool registry
   const toolRegistry = new ToolRegistry();
@@ -541,7 +177,7 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
   }
 
   // 5a. Store toolRegistry in shared store (for tool-server and other skills)
-  store.set('toolRegistry', toolRegistry);
+  store.set(STORE_KEYS.TOOL_REGISTRY, toolRegistry);
 
   // 6. Load command handlers from bot directory
   const commandRegistry = new CommandRegistry();
@@ -595,22 +231,8 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     }
   }
 
-  // 11. Load skills
-  const skills = new Map<string, Skill>();
-
-  if (options.loadSkill) {
-    const skillNames = detectSkills(config);
-
-    for (const name of skillNames) {
-      try {
-        const skill = await options.loadSkill(name);
-        skills.set(name, skill);
-        log.info(`Loaded skill: ${name}`);
-      } catch (err) {
-        log.warn(`Failed to load skill "${name}": ${err}`);
-      }
-    }
-  }
+  // 11. Load skills (auto-detection + factory)
+  const skills = await loadSkills(config, options.loadSkill, log);
 
   // 12. Register cron handlers with cron-scheduler skill BEFORE skill init
   const cronScheduler = skills.get('cron-scheduler');
@@ -670,21 +292,14 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     store,
   };
 
-  for (const [name, skill] of skills) {
-    try {
-      await skill.init(skillContext);
-      log.info(`Initialized skill: ${name}`);
-    } catch (err) {
-      log.error(`Failed to initialize skill "${name}": ${err}`);
-    }
-  }
+  await initSkills(skills, skillContext, log);
 
   // Store event bus reference for cron handlers and other modules
   const eventBusSkill = skills.get('event-bus');
   if (eventBusSkill && 'getBus' in eventBusSkill) {
     const bus = (eventBusSkill as any).getBus();
     if (bus) {
-      store.set('eventBus', bus);
+      store.set(STORE_KEYS.EVENT_BUS, bus);
       log.info('Event bus stored in instance store');
     }
   }
@@ -699,6 +314,18 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
       log.info(`Lifecycle start hook executed`);
     } catch (err) {
       log.error(`Lifecycle start hook failed: ${err}`);
+    }
+  }
+
+  // 15a. Now that start hooks have run, replay any in_flight crons that
+  //      opted in via YAML's replay_on_crash. Deferred until here so the
+  //      handlers see fully-initialized lifecycle state.
+  const cronSchedulerForReplay = skills.get('cron-scheduler');
+  if (cronSchedulerForReplay && 'runDeferredReplays' in cronSchedulerForReplay) {
+    try {
+      await (cronSchedulerForReplay as unknown as { runDeferredReplays(): Promise<void> }).runDeferredReplays();
+    } catch (err) {
+      log.error(`Cron deferred replay failed: ${err}`);
     }
   }
 
@@ -773,69 +400,14 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
       // Unknown command — fall through to brain
     }
 
-    // 17d. Reception rules
-    if (message.isGroup) {
-      const groupMode = receptionCfg?.group_mode ?? 'always';
-
-      if (groupMode === 'ignore') return;
-
-      if (groupMode === 'passive') {
-        let shouldProcess = false;
-
-        // Reply to THIS bot (not any bot)
-        if (receptionCfg?.respond_to_replies !== false
-            && message.replyToUserId
-            && instance.botId
-            && message.replyToUserId === instance.botId) {
-          shouldProcess = true;
-        }
-
-        // @mention with word boundary
-        if (!shouldProcess && receptionCfg?.respond_to_mentions !== false && instance.botUsername) {
-          const mentionRegex = new RegExp(`@${instance.botUsername}\\b`, 'i');
-          if (message.text && mentionRegex.test(message.text)) shouldProcess = true;
-        }
-
-        // Keyword/pattern matching (inline for new config, skill for legacy)
-        if (!shouldProcess && message.text) {
-          const keywords = receptionCfg?.keywords ?? [];
-          const patterns = receptionCfg?.patterns ?? [];
-          const caseSensitive = receptionCfg?.case_sensitive ?? false;
-          const compareText = caseSensitive ? message.text : message.text.toLowerCase();
-
-          for (const kw of keywords) {
-            if (compareText.includes(caseSensitive ? kw : kw.toLowerCase())) {
-              shouldProcess = true;
-              break;
-            }
-          }
-          if (!shouldProcess) {
-            for (const p of patterns) {
-              if (new RegExp(p, caseSensitive ? '' : 'i').test(message.text)) {
-                shouldProcess = true;
-                break;
-              }
-            }
-          }
-        }
-
-        if (!shouldProcess) return;
-      }
-      // groupMode === 'always' → fall through
-    } else {
-      // DM reception rules
-      const dmMode = receptionCfg?.dm_mode ?? 'always';
-      if (dmMode === 'ignore') return;
-      if (dmMode === 'keyword_only' && message.text) {
-        const keywords = receptionCfg?.keywords ?? [];
-        const caseSensitive = receptionCfg?.case_sensitive ?? false;
-        const compareText = caseSensitive ? message.text : message.text.toLowerCase();
-        let matched = false;
-        for (const kw of keywords) {
-          if (compareText.includes(caseSensitive ? kw : kw.toLowerCase())) { matched = true; break; }
-        }
-        if (!matched) return;
-      }
+    // 17d. Reception rules (pure decision via reception.ts)
+    const decision = shouldProcessMessage(message, receptionCfg, {
+      botId: instance.botId,
+      botUsername: instance.botUsername,
+    });
+    if (!decision.process) {
+      log.debug(`Reception dropped message: ${decision.reason}`);
+      return;
     }
 
     // 17e. Rate limiter

@@ -1,12 +1,89 @@
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { mkdirSync, copyFileSync, existsSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, writeFileSync } from 'node:fs';
 import { loadFleetConfig } from '../fleet.js';
+import { shortSha, validateSha } from './canary.js';
 
 /** Convention directories that may exist in a bot directory */
 const CONVENTION_DIRS = ['tools', 'commands', 'callbacks', 'cron', 'context', 'lifecycle', 'lib'];
 
-export function build(botName: string): void {
+export interface BuildOptions {
+  /** Pin the framework portion of this build to a specific git SHA. */
+  frameworkVersion?: string;
+}
+
+/**
+ * Read the framework's git SHA. Falls back to "unknown" outside a git checkout
+ * (e.g., extracted tarball). Always returns a string suitable for the
+ * FRAMEWORK_SHA file.
+ */
+export function currentFrameworkSha(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** True if `git diff --quiet` reports uncommitted changes. */
+function workingTreeDirty(): boolean {
+  try {
+    execSync('git diff --quiet && git diff --cached --quiet', { stdio: 'pipe' });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Build the framework at a specific SHA in a git worktree. Returns the
+ * absolute path of the worktree (which IS the canary framework artifact —
+ * deploy.ts SCPs from this path).
+ */
+export function buildCanaryFramework(sha: string): string {
+  const validation = validateSha(sha);
+  if (!validation.ok) {
+    throw new Error(`--framework-version: ${validation.reason}`);
+  }
+  // Verify the SHA is in local refs; refuse rather than do a surprise fetch.
+  try {
+    execSync(`git cat-file -e ${sha}^{commit}`, { stdio: 'pipe' });
+  } catch {
+    throw new Error(
+      `--framework-version: SHA ${sha} not in local git refs. Run 'git fetch origin' first.`,
+    );
+  }
+
+  const worktreePath = resolve(`.canary-worktree/${shortSha(sha)}`);
+  // If a stale worktree from a prior aborted build is sitting here, clean it
+  // out so 'git worktree add' doesn't refuse.
+  if (existsSync(worktreePath)) {
+    try {
+      execSync(`git worktree remove --force "${worktreePath}"`, { stdio: 'pipe' });
+    } catch {
+      // Fall through; the add below will surface the real error.
+    }
+  }
+  console.log(`  Adding git worktree at ${shortSha(sha)}...`);
+  execSync(`git worktree add --detach "${worktreePath}" ${sha}`, { stdio: 'inherit' });
+
+  // Full pnpm install inside the worktree — symlinks are exact-versioned, so
+  // sharing node_modules across SHA gaps would silently break. ~200 MB per
+  // canary; we accept the cost for correctness.
+  console.log(`  pnpm install inside worktree...`);
+  execSync('pnpm install --frozen-lockfile', { cwd: worktreePath, stdio: 'inherit' });
+  console.log(`  pnpm -r build inside worktree...`);
+  execSync('pnpm -r build', { cwd: worktreePath, stdio: 'inherit' });
+
+  // Stamp the canary SHA into the worktree's core/dist so getFrameworkSha()
+  // inside the canary'd bot reports the pinned SHA, not the operator's HEAD.
+  writeFileSync(resolve(worktreePath, 'packages/core/dist/FRAMEWORK_SHA'), `${sha}\n`, 'utf-8');
+
+  console.log(`✓ Canary framework built at ${worktreePath}`);
+  return worktreePath;
+}
+
+export function build(botName: string, opts: BuildOptions = {}): void {
   const fleet = loadFleetConfig();
   const bot = fleet.bots[botName];
   if (!bot) {
@@ -16,9 +93,35 @@ export function build(botName: string): void {
 
   console.log(`Building ${botName}...`);
 
-  // 1. Build all workspace packages
-  console.log('  Compiling workspace packages...');
-  execSync('pnpm -r build', { stdio: 'inherit' });
+  // 0. If pinning to a SHA, build the framework in a worktree first. The
+  //    canary path is independent of the bot dist — deploy.ts will SCP the
+  //    bot dist AND the worktree framework artifact to acemagic.
+  let frameworkSha: string;
+  if (opts.frameworkVersion) {
+    buildCanaryFramework(opts.frameworkVersion);
+    frameworkSha = opts.frameworkVersion;
+  } else {
+    // Guard against silent SHA mismatch: a build from a dirty working tree
+    // would stamp the SHA of HEAD but ship code that differs from HEAD.
+    if (workingTreeDirty()) {
+      throw new Error(
+        'working tree has uncommitted changes. Either commit them or pass --framework-version to pin the build to a clean SHA.',
+      );
+    }
+
+    // 1. Build all workspace packages in the main checkout.
+    console.log('  Compiling workspace packages...');
+    execSync('pnpm -r build', { stdio: 'inherit' });
+
+    // 1a. Stamp the framework SHA into @botforge/core's dist so getFrameworkSha()
+    //     (and therefore /api/health) reports it at runtime.
+    frameworkSha = currentFrameworkSha();
+    const coreShaPath = resolve('packages/core/dist/FRAMEWORK_SHA');
+    if (existsSync(dirname(coreShaPath))) {
+      writeFileSync(coreShaPath, `${frameworkSha}\n`, 'utf-8');
+    }
+  }
+  const sha = frameworkSha;
 
   // 2. Create dist directory
   const distDir = resolve(`dist/${botName}`);
@@ -46,6 +149,11 @@ export function build(botName: string): void {
       }
     }
   }
+
+  // 6. Stamp FRAMEWORK_SHA into the bot dist as a deploy audit trail
+  //    (the runtime SHA is read from @botforge/core's dist by getFrameworkSha()).
+  writeFileSync(resolve(distDir, 'FRAMEWORK_SHA'), `${sha}\n`, 'utf-8');
+  console.log(`  FRAMEWORK_SHA: ${sha === 'unknown' ? sha : sha.slice(0, 12)}`);
 
   console.log(`✓ Built ${botName} → dist/${botName}/`);
 }

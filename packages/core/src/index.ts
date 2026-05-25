@@ -1,7 +1,17 @@
 // Core exports
 export { loadConfig, validateConfig, type LoadConfigOptions } from './config.js';
 export { startBot, type BotInstance, type BotForgeOptions, type AdapterFactory, type SkillFactory, type MessageProcessor, type LifecycleHook, type ContextBuilder, type CronHandler } from './runtime.js';
-export { createLogger, type Skill, type SkillContext, type Logger, type DatabaseLike } from './skill.js';
+export {
+  createLogger,
+  runWithRequestContext,
+  getRequestContext,
+  mintTelegramRequestId,
+  type Skill,
+  type SkillContext,
+  type Logger,
+  type DatabaseLike,
+  type RequestContext,
+} from './skill.js';
 
 // Brain
 export { askBrain, type BrainTool, type BrainConfig, type BrainInput, type BrainResponse } from './brain.js';
@@ -20,6 +30,23 @@ export { CallbackRegistry, type CallbackActionHandler, type CallbackContext } fr
 export { withChatLock } from './chat-lock.js';
 export { shouldAllow } from './rate-limiter.js';
 export { setRef, getRef, extractRefs, expandRefs, clearRefs } from './numbered-refs.js';
+export { getFrameworkSha, _resetFrameworkShaCache } from './framework-info.js';
+export { STORE_KEYS, storeAccess, type BotStore, type PostResponseHint } from './bot-store.js';
+export {
+  CallbackIdempotency,
+  callbackIdempotency,
+  withCallbackIdempotency,
+  type IdempotencyOptions,
+} from './callback-idempotency.js';
+export {
+  withTimeout,
+  anySignal,
+  TimeoutError,
+  DEFAULT_LLM_TIMEOUT_MS,
+  DEFAULT_TOOL_TIMEOUT_MS,
+  DEFAULT_HTTP_TIMEOUT_MS,
+  type TimeoutOptions,
+} from './abort.js';
 
 // Adapter types
 export type {
@@ -51,12 +78,8 @@ export type {
   CronJob,
   Health,
   ToolServer,
-  Communication,
-  Subscription,
   Behavior,
   Reception,
   MessageTypes,
-  Pipeline,
-  PipelineStep,
   ToolDefinition,
 } from './schema.js';

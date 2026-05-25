@@ -4,16 +4,40 @@
 
 import TelegramBot from 'node-telegram-bot-api';
 import { readFileSync } from 'fs';
-import type {
-  PlatformAdapter,
-  IncomingMessage,
-  OutgoingMessage,
-  MessageHandler,
-  CallbackHandler,
-  BotConfig,
-  TelegramPlatform,
-  Logger,
+import {
+  mintTelegramRequestId,
+  runWithRequestContext,
+  type PlatformAdapter,
+  type IncomingMessage,
+  type OutgoingMessage,
+  type MessageHandler,
+  type CallbackHandler,
+  type BotConfig,
+  type TelegramPlatform,
+  type Logger,
 } from '@botforge/core';
+import {
+  createState,
+  onPollingError,
+  onSuccessfulPoll,
+  setPaused,
+  type ResilienceState,
+} from './polling-resilience.js';
+
+/**
+ * Minimal interface implemented by the @botforge/skill-telegram-inbox skill.
+ * Defined here (not imported) so the adapter doesn't depend on the skill.
+ */
+export interface InboxAPI {
+  acquireForProcessing(
+    updateId: number,
+    kind: string,
+    chatId: string | null,
+    rawJson: string,
+  ): { action: 'process' } | { action: 'skip'; reason: string };
+  markDone(updateId: number): void;
+  markFailed(updateId: number, error: string): void;
+}
 
 export class TelegramAdapter implements PlatformAdapter {
   readonly platform = 'telegram';
@@ -25,6 +49,9 @@ export class TelegramAdapter implements PlatformAdapter {
   private log: Logger;
   private dynamicChatIds = new Set<string>();
   private groupJoinHandler?: (chatId: string, title: string) => void;
+  private pollingResilience: ResilienceState = createState();
+  private inbox?: InboxAPI;
+  private origProcessUpdate?: (update: unknown) => void;
 
   constructor(botConfig: BotConfig, log: Logger) {
     const platform = botConfig.platform;
@@ -46,34 +73,109 @@ export class TelegramAdapter implements PlatformAdapter {
     this.bot = new TelegramBot(this.config.token, options);
   }
 
+  /**
+   * Inject a durable inbox so polled updates survive a process crash mid-handler.
+   * Called by the @botforge/skill-telegram-inbox skill during init.
+   *
+   * Patches node-telegram-bot-api's processUpdate to write each update to
+   * SQLite BEFORE dispatching to user handlers. On restart the library
+   * resumes from offset=0; Telegram replays the last 24h and the inbox's
+   * acquireForProcessing skips already-done updates.
+   */
+  setInbox(inbox: InboxAPI): void {
+    if (this.inbox) {
+      this.log.warn('TelegramAdapter.setInbox called twice; ignoring second call');
+      return;
+    }
+    this.inbox = inbox;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.origProcessUpdate = (this.bot as any).processUpdate.bind(this.bot);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (this.bot as any).processUpdate = (update: any) => {
+      try {
+        const updateId: number | undefined = update?.update_id;
+        if (typeof updateId !== 'number') {
+          return this.origProcessUpdate!(update);
+        }
+        const kind = update.message ? 'message'
+          : update.callback_query ? 'callback_query'
+          : update.edited_message ? 'edited_message'
+          : 'other';
+        const chatId: string | null =
+          update.message?.chat?.id?.toString() ??
+          update.callback_query?.message?.chat?.id?.toString() ??
+          update.edited_message?.chat?.id?.toString() ??
+          null;
+
+        const result = inbox.acquireForProcessing(updateId, kind, chatId, JSON.stringify(update));
+        if (result.action === 'skip') {
+          this.log.debug(`inbox: skip update ${updateId} (${result.reason})`);
+          return;
+        }
+        // Attach updateId so the handlers below can mark done/failed.
+        if (update.message) update.message._updateId = updateId;
+        if (update.callback_query) update.callback_query._updateId = updateId;
+        if (update.edited_message) update.edited_message._updateId = updateId;
+        return this.origProcessUpdate!(update);
+      } catch (err) {
+        this.log.error(`inbox processUpdate interceptor error: ${err}`);
+        // Degrade to at-most-once rather than zero delivery.
+        return this.origProcessUpdate!(update);
+      }
+    };
+  }
+
   async start(): Promise<void> {
     // Wire up message listener
     this.bot.on('message', async (msg) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updateId: number | undefined = (msg as any)._updateId;
       const incoming = this.convertMessage(msg);
-      if (!incoming) return;
+      if (!incoming) {
+        if (updateId !== undefined) this.inbox?.markDone(updateId);
+        return;
+      }
 
       // Filter by allowed chat IDs
       if (this.config.chat_ids?.length) {
         const chatStr = String(msg.chat.id);
         if (!this.config.chat_ids.includes(chatStr) && !this.dynamicChatIds.has(chatStr)) {
           this.log.debug(`Ignoring message from unauthorized chat ${msg.chat.id}`);
+          if (updateId !== undefined) this.inbox?.markDone(updateId);
           return;
         }
       }
 
       if (this.messageHandler) {
-        try {
-          await this.messageHandler(incoming);
-        } catch (err) {
-          this.log.error(`Message handler error: ${err}`);
-        }
+        const requestId = mintTelegramRequestId(incoming.chatId, updateId ?? msg.message_id);
+        await runWithRequestContext(
+          { request_id: requestId, chat_id: incoming.chatId, user_id: incoming.userId },
+          async () => {
+            try {
+              await this.messageHandler!(incoming);
+              if (updateId !== undefined) this.inbox?.markDone(updateId);
+            } catch (err) {
+              this.log.error(`Message handler error: ${err}`);
+              if (updateId !== undefined) this.inbox?.markFailed(updateId, String(err));
+            }
+          },
+        );
+      } else if (updateId !== undefined) {
+        // No handler — there's nothing more we can do; treat as done so the
+        // inbox doesn't retry forever.
+        this.inbox?.markDone(updateId);
       }
     });
 
     // Wire up callback query listener
     this.bot.on('callback_query', async (query) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updateId: number | undefined = (query as any)._updateId;
       const incoming = this.convertCallback(query);
-      if (!incoming) return;
+      if (!incoming) {
+        if (updateId !== undefined) this.inbox?.markDone(updateId);
+        return;
+      }
 
       // Filter by allowed chat IDs (same whitelist as messages)
       if (this.config.chat_ids?.length) {
@@ -81,6 +183,7 @@ export class TelegramAdapter implements PlatformAdapter {
         if (!this.config.chat_ids.includes(chatStr) && !this.dynamicChatIds.has(chatStr)) {
           this.log.debug(`Ignoring callback from unauthorized chat ${chatStr}`);
           this.bot.answerCallbackQuery(query.id).catch(() => {});
+          if (updateId !== undefined) this.inbox?.markDone(updateId);
           return;
         }
       }
@@ -101,12 +204,20 @@ export class TelegramAdapter implements PlatformAdapter {
         }
       }, 5000);
 
+      let handlerError: unknown;
       if (this.callbackHandler) {
-        try {
-          await this.callbackHandler(incoming);
-        } catch (err) {
-          this.log.error(`Callback handler error: ${err}`);
-        }
+        const requestId = mintTelegramRequestId(incoming.chatId, updateId ?? query.id);
+        await runWithRequestContext(
+          { request_id: requestId, chat_id: incoming.chatId, user_id: incoming.userId },
+          async () => {
+            try {
+              await this.callbackHandler!(incoming);
+            } catch (err) {
+              this.log.error(`Callback handler error: ${err}`);
+              handlerError = err;
+            }
+          },
+        );
       }
 
       clearTimeout(fallbackTimer);
@@ -115,11 +226,21 @@ export class TelegramAdapter implements PlatformAdapter {
         answered = true;
         this.bot.answerCallbackQuery(query.id).catch(() => {});
       }
+
+      if (updateId !== undefined) {
+        if (handlerError) this.inbox?.markFailed(updateId, String(handlerError));
+        else this.inbox?.markDone(updateId);
+      }
     });
 
     this.bot.on('polling_error', (err) => {
       this.log.error(`Polling error: ${err.message}`);
+      this.handlePollingError(err);
     });
+
+    // A successful update means polling is working — reset any escalation.
+    this.bot.on('message', () => onSuccessfulPoll(this.pollingResilience));
+    this.bot.on('callback_query', () => onSuccessfulPoll(this.pollingResilience));
 
     // Auto-detect group joins/removals
     this.bot.on('my_chat_member', async (update: any) => {
@@ -147,6 +268,46 @@ export class TelegramAdapter implements PlatformAdapter {
     }
     this.connected = false;
     this.log.info('Telegram adapter stopped');
+  }
+
+  private async handlePollingError(err: unknown): Promise<void> {
+    const decision = onPollingError(this.pollingResilience, err);
+    switch (decision.action) {
+      case 'noop':
+      case 'log_only':
+        return;
+      case 'exit_fatal':
+        this.log.error('Polling error is fatal (auth/permission) — exiting for operator intervention');
+        process.exit(1);
+        return;
+      case 'exit_watchdog':
+        this.log.error(
+          `Polling-error watchdog tripped: ${decision.recentErrorCount} errors in ${this.pollingResilience.watchdogWindowMs}ms — exiting for systemd restart`,
+        );
+        process.exit(1);
+        return;
+      case 'backoff':
+        await this.pausePolling(decision.ms, decision.level);
+        return;
+    }
+  }
+
+  private async pausePolling(ms: number, level: number): Promise<void> {
+    setPaused(this.pollingResilience, true);
+    this.log.warn(`Transient polling error; pausing polling for ${ms}ms (escalation level ${level})`);
+    try {
+      // node-telegram-bot-api keeps internal state for stop/start. Awaiting both
+      // makes sure we don't race a second pause window against ourselves.
+      await this.bot.stopPolling();
+      await new Promise((r) => setTimeout(r, ms));
+      await this.bot.startPolling();
+      this.log.info(`Polling resumed after ${ms}ms pause`);
+    } catch (err) {
+      this.log.error(`Failed to restart polling after backoff: ${err}`);
+      process.exit(1);
+    } finally {
+      setPaused(this.pollingResilience, false);
+    }
   }
 
   onMessage(handler: MessageHandler): void {

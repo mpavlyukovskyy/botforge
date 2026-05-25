@@ -1,0 +1,49 @@
+# T3.10 — Dependabot for the botforge monorepo.
+#
+# pnpm workspace: a single update PR per dependency keeps the noise down.
+# Weekly cadence + open PR limit so a quiet week doesn't accumulate hundreds.
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      # Group test tooling so a vitest + tsx + tsup bump lands in one PR.
+      test-tooling:
+        patterns:
+          - "tsup"
+          - "tsx"
+          - "vitest"
+          - "@vitest/*"
+          - "@types/node"
+      # Group Anthropic + Telegram SDKs together — they often bump in pairs.
+      sdks:
+        patterns:
+          - "@anthropic-ai/*"
+          - "node-telegram-bot-api"
+      # Group Pino + transports.
+      logging:
+        patterns:
+          - "pino"
+          - "pino-*"
+    # Pin the major version of dev tools so a surprise major doesn't break CI
+    # on a quiet Monday. The grouped PR makes the major bump intentional.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"

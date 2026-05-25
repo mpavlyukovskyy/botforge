@@ -27,6 +27,12 @@
     "@botforge/skill-tool-server": "workspace:*",
     "@botforge/skill-reply-context": "workspace:*",
     "@botforge/skill-response-formatter": "workspace:*",
+    "@botforge/skill-telegram-inbox": "workspace:*",
+    "@botforge/skill-telegram-outbox": "workspace:*",
+    "@botforge/skill-dlq": "workspace:*",
+    "@botforge/skill-heartbeat": "workspace:*",
+    "@botforge/skill-backup": "workspace:*",
+    "@botforge/skill-workspace-monitor": "workspace:*",
     "commander": "^13.0.0",
     "yaml": "^2.7.0"
   },

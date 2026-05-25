@@ -108,6 +108,76 @@ export class SqliteStorage {
   }
 }
 
+// ─── Telegram Outbox (T2.1) ──────────────────────────────────────────────────
+
+export const TELEGRAM_OUTBOX_MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'create_tg_outbox',
+    up: `
+      CREATE TABLE IF NOT EXISTS tg_outbox (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id       TEXT NOT NULL,
+        payload_json  TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'pending',
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        last_error    TEXT,
+        created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+        next_attempt_at TEXT,
+        sent_at       TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_tg_outbox_status ON tg_outbox(status, next_attempt_at);
+    `,
+  },
+];
+
+// ─── Dead-letter queue (T2.3) ────────────────────────────────────────────────
+
+export const DLQ_MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'create_dlq',
+    up: `
+      CREATE TABLE IF NOT EXISTS dlq (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind         TEXT NOT NULL,
+        payload      TEXT NOT NULL,
+        error        TEXT NOT NULL,
+        occurred_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        attempts     INTEGER NOT NULL DEFAULT 1,
+        status       TEXT NOT NULL DEFAULT 'pending',
+        replayed_at  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_dlq_status ON dlq(status, occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_dlq_kind ON dlq(kind, occurred_at);
+    `,
+  },
+];
+
+// ─── Telegram Inbox — durable at-least-once delivery ─────────────────────────
+
+export const TELEGRAM_INBOX_MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'create_tg_inbox',
+    up: `
+      CREATE TABLE IF NOT EXISTS tg_inbox (
+        update_id    INTEGER PRIMARY KEY,
+        kind         TEXT NOT NULL,
+        chat_id      TEXT,
+        raw_json     TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'received',
+        attempts     INTEGER NOT NULL DEFAULT 0,
+        received_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at   TEXT,
+        finished_at  TEXT,
+        last_error   TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_tg_inbox_status ON tg_inbox(status, received_at);
+    `,
+  },
+];
+
 // ─── Conversation History (shared pattern) ───────────────────────────────────
 
 export const CONVERSATION_HISTORY_MIGRATIONS: Migration[] = [

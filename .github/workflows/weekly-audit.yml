@@ -1,0 +1,26 @@
+# T3.10 — weekly pnpm audit. Fails the workflow on high/critical CVEs.
+# Dependabot keeps deps moving; this is the second pair of eyes that catches
+# transitive-dep CVEs Dependabot hasn't surfaced yet.
+
+name: weekly-audit
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"  # Mondays 13:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Fail on high or critical. Moderate is informational.
+      - run: pnpm audit --audit-level high

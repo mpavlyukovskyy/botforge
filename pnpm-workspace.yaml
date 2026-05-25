@@ -3,3 +3,4 @@ packages:
   - "packages/adapters/*"
   - "packages/skills/*"
   - "packages/storage/*"
+  - "packages/tools/*"
