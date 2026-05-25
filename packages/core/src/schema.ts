@@ -142,10 +142,45 @@ const IntegrationSchema = z.object({
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 
+const HeartbeatSchema = z.object({
+  poll_url: z.string().optional().describe('Uptime Kuma push URL fired every poll_interval_ms'),
+  poll_interval_ms: z.number().positive().default(60_000),
+  cron_urls: z.record(z.string()).optional().describe('Per-cron push URLs keyed on cron job name'),
+});
+
 const HealthSchema = z.object({
   port: z.number(),
   path: z.string().default('/api/health'),
   management_api: z.boolean().default(true).describe('Enable /api/config, /api/logs, /api/restart'),
+  heartbeat: HeartbeatSchema.optional(),
+});
+
+const InboxSchema = z.object({
+  enabled: z.boolean().default(true),
+  processing_timeout_ms: z.number().positive().default(30_000),
+});
+
+const OutboxSchema = z.object({
+  enabled: z.boolean().default(true),
+  poll_interval_ms: z.number().positive().default(250),
+});
+
+const DlqSchema = z.object({
+  enabled: z.boolean().default(true),
+});
+
+const BackupSchema = z.object({
+  enabled: z.boolean().default(false),
+  target_host: z.string().optional(),
+  target_dir: z.string().optional(),
+  local_retention_days: z.number().positive().default(7),
+});
+
+const WorkspaceMonitorSchema = z.object({
+  enabled: z.boolean().default(false),
+  cap_usd: z.number().positive().optional().describe('Daily workspace cap; falls back to ANTHROPIC_WORKSPACE_CAP_USD env'),
+  assumed_workspace_share: z.number().positive().max(1).default(1),
+  admin_chat_id: z.string().optional(),
 });
 
 // ─── Tool Server ────────────────────────────────────────────────────────
@@ -269,6 +304,13 @@ export const BotConfigSchema = z.object({
   health: HealthSchema.optional(),
   tool_server: ToolServerSchema.optional(),
   behavior: BehaviorSchema.optional(),
+
+  // Tier 2 skills — opt-in / opt-out via these blocks.
+  inbox: InboxSchema.optional(),
+  outbox: OutboxSchema.optional(),
+  dlq: DlqSchema.optional(),
+  backup: BackupSchema.optional(),
+  workspace_monitor: WorkspaceMonitorSchema.optional(),
 
   tool_definitions: z.array(ToolDefinitionSchema).optional(),
 
