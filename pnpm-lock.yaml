@@ -598,6 +598,31 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/tools/tasks:
+    dependencies:
+      '@botforge/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.0
+        version: 7.6.13
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
 packages:
 
   '@adraffy/ens-normalize@1.10.1':
