@@ -344,26 +344,38 @@ export function createBrainProcessor(
       storeAccess.clearPostResponse(inst.store);
     }
 
-    // Store conversation in history (if skill available)
+    // Post-send persistence — each step wrapped + swallowed so a persistence
+    // failure can't bubble to runtime.ts's outer catch and trigger a SECOND
+    // "Sorry, I couldn't process that" reply on top of the already-sent message.
     if (historySkill && 'addMessage' in historySkill) {
-      await (historySkill as any).addMessage(message.chatId, 'user', message.text ?? '[media]');
-      if (responseText) {
-        await (historySkill as any).addMessage(message.chatId, 'assistant', responseText);
+      try {
+        await (historySkill as any).addMessage(message.chatId, 'user', message.text ?? '[media]');
+        if (responseText) {
+          await (historySkill as any).addMessage(message.chatId, 'assistant', responseText);
+        }
+      } catch (err) {
+        log.warn(`Post-send history.addMessage failed: ${err}`);
       }
     }
 
-    // Record pending questions from bot response
     if (pendingQSkill && 'recordQuestion' in pendingQSkill && responseText) {
-      (pendingQSkill as any).recordQuestion(message.chatId, responseText);
+      try {
+        (pendingQSkill as any).recordQuestion(message.chatId, responseText);
+      } catch (err) {
+        log.warn(`Post-send pendingQ.recordQuestion failed: ${err}`);
+      }
     }
 
-    // Record token usage (if skill available)
     const tokenTracker = inst.skills.get('token-tracker');
     if (tokenTracker && 'recordUsage' in tokenTracker && brainResponse) {
-      await (tokenTracker as any).recordUsage(
-        config.brain.model,
-        brainResponse.usage.costUsd,
-      );
+      try {
+        await (tokenTracker as any).recordUsage(
+          config.brain.model,
+          brainResponse.usage.costUsd,
+        );
+      } catch (err) {
+        log.warn(`Post-send tokenTracker.recordUsage failed: ${err}`);
+      }
     }
   };
 }
