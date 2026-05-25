@@ -26,11 +26,14 @@ const attachPhoto = {
       // botforge surfaces media as Buffer[] on ctx.files. Take the first file.
       const file = ctx.files?.[0];
       if (!file) return 'No photo found in the current message.';
+      if (file.length === 0) return 'Photo buffer is empty — please re-send the image.';
 
       const db = ensureDb(ctx.config);
+      const meta = ctx.fileMetadata?.[0] ?? {};
+      const mimeType = meta.mimeType && meta.mimeType.startsWith('image/') ? meta.mimeType : 'image/jpeg';
+      const ext = mimeType.split('/')[1]?.split(';')[0] || 'jpg';
+      const filename = meta.fileName || `task-${task.id.slice(0, 8)}.${ext}`;
       const imageBase64 = file.toString('base64');
-      const filename = 'photo.jpg';
-      const mimeType = 'image/jpeg';
 
       db.prepare(
         `INSERT INTO task_attachments (task_id, type, filename, mime_type, image_base64, display_order, synced_at)
