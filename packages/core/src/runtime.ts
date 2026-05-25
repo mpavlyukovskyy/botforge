@@ -919,9 +919,15 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
     if (callback.callbackData) {
       const handler = callbackRegistry.match(callback.callbackData);
       if (handler) {
+        // The Telegram adapter exposes `callback.id` as the callback_query.id
+        // (used for answerCallbackQuery), NOT the message_id of the message
+        // hosting the inline keyboard. Pull the real message_id from the raw
+        // payload so handlers can edit/delete the source message. Fall back to
+        // `callback.id` for non-Telegram adapters that may use it differently.
+        const rawMsgId = (callback.raw as any)?.message?.message_id;
         const ctx: CallbackContext = {
           ...buildModuleContext(callback, instance),
-          messageId: callback.id,
+          messageId: rawMsgId != null ? String(rawMsgId) : callback.id,
           answerCallback: callback.answerCallback ?? (async () => {}),
         };
         try {

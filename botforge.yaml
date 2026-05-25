@@ -1,7 +1,7 @@
 fleet:
-  server: openclaw
-  ssh_host: ${OPENCLAW_SSH_HOST}
-  ssh_user: root
+  server: acemagic
+  ssh_host: ${ACEMAGIC_SSH_HOST}
+  ssh_user: m
   base_dir: /opt/botforge
 
 bots:
@@ -38,10 +38,10 @@ bots:
     config: bots/trainer.yaml
     service: botforge-trainer
     port: 8092
-  cleancloud:
-    config: bots/cleancloud.yaml
-    service: botforge-cleancloud
-    port: 8093
+  hali99:
+    config: bots/hali99.yaml
+    service: botforge-hali99
+    port: 8089
   test-echo:
     config: bots/test-echo.yaml
     port: 9001
