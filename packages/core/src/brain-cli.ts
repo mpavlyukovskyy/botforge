@@ -258,7 +258,15 @@ async function callClaude(model: string, systemPrompt: string, userMessage: stri
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[brain-cli] Claude CLI call failed: ${message}`);
-    throw new Error(`Claude CLI call failed: ${message}`);
+    // execFile rejection carries structured fields the wrapped message drops.
+    // Surface stderr + exit code so classifyError can see the REAL cause
+    // (e.g. "credit balance is too low" / auth failures) instead of bucketing
+    // every CLI failure as a generic cli_failure.
+    const e = err as { stderr?: unknown; code?: unknown };
+    const stderr = typeof e?.stderr === 'string' ? e.stderr.trim() : '';
+    const code = e?.code !== undefined ? ` (exit ${String(e.code)})` : '';
+    const detail = stderr ? `${message} — ${stderr}` : message;
+    console.error(`[brain-cli] Claude CLI call failed${code}: ${detail}`);
+    throw new Error(`Claude CLI call failed${code}: ${detail}`);
   }
 }
