@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getColumns, findColumnByName, createItem, updateItem, ensureDb } from '../lib/atlas-client.js';
 import { getRegisteredChat } from '../lib/db.js';
+import { normalizeDeadline } from '../lib/deadline.js';
 
 const createTask = {
   name: 'create_task',
@@ -17,6 +18,11 @@ const createTask = {
     const db = ensureDb(ctx.config);
     const taskId = crypto.randomUUID();
     const title = args.title;
+    // Normalize the deadline before it touches Atlas or SQLite. The brain has
+    // emitted values like "+2h" that crash Atlas (Invalid Date → 500) and
+    // break local datetime() comparisons — normalizeDeadline yields a valid
+    // date string or null. See lib/deadline.js + the 2026-06-07 incident.
+    const deadline = normalizeDeadline(args.deadline);
     const columns = await getColumns(ctx);
 
     // Resolve column
@@ -50,7 +56,7 @@ const createTask = {
       title,
       columnId,
       assignee: args.assignee || undefined,
-      deadline: args.deadline || undefined,
+      deadline: deadline || undefined,
       subtasks,
       requester,
       requesterChatId: ctx.chatId,
@@ -67,7 +73,7 @@ const createTask = {
       columnName || null,
       columnId || null,
       args.assignee || null,
-      args.deadline || null,
+      deadline || null,
       args.done ? 'DONE' : 'OPEN',
       atlasResult ? new Date().toISOString() : null,
       requester,
@@ -149,7 +155,7 @@ const createTask = {
     let result = `Created: "${title}" (ID:${shortId})`;
     if (columnName) result += ` in ${columnName}`;
     if (args.assignee) result += `, assigned to ${args.assignee}`;
-    if (args.deadline) result += `, due ${args.deadline}`;
+    if (deadline) result += `, due ${deadline}`;
     if (!atlasResult) result += ' (saved locally, will sync later)';
     return result;
   },

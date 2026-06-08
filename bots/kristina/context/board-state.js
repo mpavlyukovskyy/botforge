@@ -12,6 +12,12 @@ export default {
     try {
       const columns = await getColumns(ctx);
       const items = await getItems(ctx, { status: 'OPEN' });
+      // getItems sets _stale when Atlas was unreachable and it served the
+      // local cache. The board may then be incomplete — the brain must NOT
+      // conclude a task was removed or recreate it (the 2026-06-07 failure).
+      const stale = items._stale === true;
+      const staleBanner =
+        '⚠ Atlas is temporarily unreachable. This board is served from the local cache and may be incomplete or out of date. Do NOT tell the user a task was removed, and do NOT recreate a task you cannot find right now — the board is just unsynced. Ask them to try again shortly.';
 
       // Admin (Mark) sees the full board in context. Non-admins see only
       // their own + unattributed. Without this bypass the brain sees a
@@ -28,7 +34,11 @@ export default {
         );
       }
 
-      if (filtered.length === 0) return '<board_state>Board is empty.</board_state>';
+      if (filtered.length === 0) {
+        return stale
+          ? `<board_state>\n${staleBanner}\nNo cached tasks to show.\n</board_state>`
+          : '<board_state>Board is empty.</board_state>';
+      }
 
       const now = new Date();
       const byColumn = {};
@@ -61,7 +71,8 @@ export default {
 
       text += `\nAvailable columns: ${columns.map(c => c.name).join(', ')}`;
 
-      return `<board_state>\n${text.trim()}\n</board_state>`;
+      const body = stale ? `${staleBanner}\n\n${text.trim()}` : text.trim();
+      return `<board_state>\n${body}\n</board_state>`;
     } catch (err) {
       return '<board_state>Failed to load board state.</board_state>';
     }

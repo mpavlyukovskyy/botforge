@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getColumns, findColumnByName, updateItem, findTaskByIdPrefix, ensureDb } from '../lib/atlas-client.js';
 import { isAdmin } from '../lib/db.js';
+import { normalizeDeadline } from '../lib/deadline.js';
 
 const updateTask = {
   name: 'update_task',
@@ -26,9 +27,14 @@ const updateTask = {
     const spokId = task.spok_id;
     const updates = {};
 
+    // Normalize before it reaches Atlas/SQLite (see lib/deadline.js). A bad
+    // value (e.g. "+2h") normalizes to null and is skipped rather than 500ing
+    // Atlas / corrupting local datetime() comparisons.
+    const deadline = args.deadline ? normalizeDeadline(args.deadline) : undefined;
+
     if (args.title) updates.title = args.title;
     if (args.assignee) updates.assignee = args.assignee;
-    if (args.deadline) updates.deadline = args.deadline;
+    if (deadline) updates.deadline = deadline;
 
     // Resolve column move
     if (args.column) {
@@ -48,8 +54,8 @@ const updateTask = {
     if (args.assignee) {
       db.prepare("UPDATE tasks SET assignee = ?, updated_at = datetime('now') WHERE id = ?").run(args.assignee, task.id);
     }
-    if (args.deadline) {
-      db.prepare("UPDATE tasks SET deadline = ?, updated_at = datetime('now') WHERE id = ?").run(args.deadline, task.id);
+    if (deadline) {
+      db.prepare("UPDATE tasks SET deadline = ?, updated_at = datetime('now') WHERE id = ?").run(deadline, task.id);
     }
 
     // Update on Atlas

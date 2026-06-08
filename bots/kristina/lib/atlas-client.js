@@ -204,10 +204,48 @@ export function findColumnByName(name, columns) {
 
 // ─── CRUD ───────────────────────────────────────────────────────────────────
 
+/**
+ * Read tasks from the local SQLite mirror, shaped like Atlas items. Used as a
+ * fallback when Atlas is unreachable so the brain's <board_state> never goes
+ * falsely empty — the failure that made it report live tasks as "removed" and
+ * recreate duplicates (2026-06-07). The returned array carries a non-enumerable
+ * `_stale` flag so callers (board_state) can warn the user the data may lag.
+ */
+function getLocalItems(ctx, opts = {}) {
+  let items = [];
+  try {
+    const db = ensureDb(ctx.config);
+    const where = [];
+    const params = [];
+    if (opts.status) { where.push('status = ?'); params.push(opts.status); }
+    if (opts.columnId) { where.push('column_id = ?'); params.push(opts.columnId); }
+    const sql = `SELECT id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, requester
+                 FROM tasks ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at`;
+    items = db.prepare(sql).all(...params).map(r => ({
+      // Prefer the Atlas id so board IDs match the synced board; fall back to
+      // the local id for not-yet-synced tasks (still tool-resolvable via the
+      // 8-char prefix, which findTaskByIdPrefix matches against id OR spok_id).
+      id: r.spok_id || r.id,
+      title: r.title,
+      columnName: r.column_name || '',
+      columnId: r.column_id || null,
+      assignee: r.assignee || null,
+      deadline: r.deadline || null,
+      status: r.status,
+      earnedStatus: r.earned_status || null,
+      requester: r.requester || null,
+    }));
+  } catch (err) {
+    ctx.log.error(`[atlas] Local fallback read failed: ${err}`);
+  }
+  Object.defineProperty(items, '_stale', { value: true, enumerable: false });
+  return items;
+}
+
 export async function getItems(ctx, opts = {}) {
   if (isCircuitOpen()) {
-    ctx.log.error('[atlas] Circuit open, returning empty items');
-    return [];
+    ctx.log.warn('[atlas] Circuit open, serving items from local cache');
+    return getLocalItems(ctx, opts);
   }
 
   try {
@@ -229,9 +267,9 @@ export async function getItems(ctx, opts = {}) {
       columnName: item.column?.name || item.columnName || '',
     }));
   } catch (err) {
-    ctx.log.error(`[atlas] Failed to get items: ${err}`);
+    ctx.log.error(`[atlas] Failed to get items, serving from local cache: ${err}`);
     recordFailure();
-    return [];
+    return getLocalItems(ctx, opts);
   }
 }
 
