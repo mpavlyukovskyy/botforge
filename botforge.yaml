@@ -29,11 +29,6 @@ bots:
     config: bots/babushka.yaml
     service: botforge-babushka
     port: 8085
-  alfred:
-    config: standalone/taskbot
-    service: taskbot
-    port: 8088
-    dashboard_port: 8090
   chief-of-staff:
     config: bots/chief-of-staff.yaml
     service: botforge-chief-of-staff
