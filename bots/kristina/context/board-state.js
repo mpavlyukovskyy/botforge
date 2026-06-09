@@ -5,6 +5,7 @@
  */
 import { getItems, getColumns } from '../lib/atlas-client.js';
 import { getRegisteredChat, isAdmin } from '../lib/db.js';
+import { computeDecayValue } from '../lib/decay.js';
 
 export default {
   type: 'board_state',
@@ -53,7 +54,11 @@ export default {
         if (item.deadline) {
           entry += ` | due:${item.deadline}`;
           if (new Date(item.deadline) < now) {
-            entry += ' [OVERDUE]';
+            // Surface the live decay value the nudge/deduction crons act on, so
+            // the brain sees the same lifecycle state (it was blind to this —
+            // it could nudge-reply about a value it couldn't see).
+            const { value } = computeDecayValue(item.deadline);
+            entry += value >= 0 ? ` [OVERDUE $${value.toFixed(2)}]` : ` [OVERDUE -$${Math.abs(value).toFixed(2)}]`;
             overdueCount++;
           }
         }

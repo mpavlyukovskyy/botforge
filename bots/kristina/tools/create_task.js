@@ -18,6 +18,23 @@ const createTask = {
     const db = ensureDb(ctx.config);
     const taskId = crypto.randomUUID();
     const title = args.title;
+
+    // Dedup guard: structurally prevent the "recreate a task that already
+    // exists" duplicate class (e.g. the brain calling create_task instead of
+    // hand_off, or recreating a task it momentarily couldn't see — incidents
+    // 2026-06-07/09). If an OPEN task with the same normalized title already
+    // exists locally, don't create a second one; point the brain at it.
+    if (!args.done) {
+      const norm = title.trim().toLowerCase();
+      const existing = db.prepare(
+        "SELECT id, spok_id, column_name FROM tasks WHERE status = 'OPEN' AND lower(trim(title)) = ?"
+      ).get(norm);
+      if (existing) {
+        const shortId = (existing.spok_id || existing.id).slice(0, 8);
+        return `A task "${title}" already exists (ID:${shortId}${existing.column_name ? `, in ${existing.column_name}` : ''}). Not creating a duplicate — update or hand off that one instead if needed.`;
+      }
+    }
+
     // Normalize the deadline before it touches Atlas or SQLite. The brain has
     // emitted values like "+2h" that crash Atlas (Invalid Date → 500) and
     // break local datetime() comparisons — normalizeDeadline yields a valid
