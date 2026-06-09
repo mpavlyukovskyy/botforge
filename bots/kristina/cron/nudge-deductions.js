@@ -13,6 +13,7 @@ import { DateTime } from 'luxon';
 import { ensureDb, syncDeduction } from '../lib/atlas-client.js';
 import { isWorkingDay, TIMEZONE } from '../lib/working-hours.js';
 import { getCurrentBillingMonth } from '../lib/db.js';
+import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
 
 const DAILY_DEDUCTION_CAP = 5; // 50 nudges = $5.00 max per chat
 const DEDUCTION_CENTS = 10;
@@ -28,6 +29,15 @@ export default {
     const today = now.toFormat('yyyy-MM-dd');
 
     const db = ensureDb(ctx.config);
+
+    // Bleed-stopper: never charge money for a task Atlas no longer has, and
+    // never charge when Atlas can't be verified (acting on unverifiable state
+    // is how ghosts got charged). See lib/presence.js.
+    const presence = await loadAtlasPresence(ctx);
+    if (shouldSkipRun(presence)) {
+      ctx.log.warn('nudge_deductions: Atlas unverifiable, skipping run');
+      return;
+    }
 
     // Pre-aggregate per-chat deduction counts already applied today
     const chatCounts = db.prepare(
@@ -56,6 +66,13 @@ export default {
         `SELECT id, spok_id, title, status, column_name, requester_chat_id
            FROM tasks WHERE id = ?`
       ).get(row.task_id);
+
+      // Ghost (deleted in Atlas) → close the nudge, never charge.
+      if (task && presence.skip(task)) {
+        db.prepare("UPDATE nudge_log SET responded_at = ? WHERE id = ?")
+          .run(new Date().toISOString(), row.id);
+        continue;
+      }
 
       // Task moved out of In Progress / completed → close the nudge
       if (!task || task.status === 'DONE' || task.status === 'ARCHIVED' || task.column_name !== 'In Progress') {

@@ -273,6 +273,32 @@ export async function getItems(ctx, opts = {}) {
   }
 }
 
+/**
+ * Raw fetch of the set of live Atlas task ids (cuids), used by the
+ * financial/nudge crons to refuse to act on tasks Atlas no longer has
+ * (the "ghost" signature: a local row with a spok_id absent from Atlas).
+ *
+ * Unlike getItems() this NEVER falls back to the local cache — a presence
+ * check served from local would be meaningless. Returns a Set on success,
+ * or null when Atlas could not be verified (circuit open / fetch failed),
+ * so callers can choose to skip rather than act on unverifiable state.
+ */
+export async function fetchAtlasLiveIds(ctx) {
+  if (isCircuitOpen()) return null;
+  try {
+    const { endpoint } = getAtlasConfig(ctx);
+    const resp = await atlasFetch(ctx, `${endpoint}?status=OPEN`);
+    if (!resp.ok) throw new Error(`live-ids fetch failed: ${resp.status}`);
+    const data = await resp.json();
+    recordSuccess();
+    return new Set((data.items || []).map(i => i.id));
+  } catch (err) {
+    ctx.log?.warn?.(`[atlas] fetchAtlasLiveIds failed: ${err}`);
+    recordFailure();
+    return null;
+  }
+}
+
 export async function createItem(ctx, data) {
   if (isCircuitOpen()) {
     ctx.log.warn('[atlas] Circuit open, saving locally only');

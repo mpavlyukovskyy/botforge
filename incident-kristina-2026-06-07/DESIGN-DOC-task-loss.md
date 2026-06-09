@@ -1,8 +1,23 @@
 # Kristina task-loss: root cause + fundamental fix plan
 
 **Date:** 2026-06-07
-**Status:** root cause proven. **Phase 0 remediation EXECUTED 2026-06-08 ~02:30 ET — writes restored, backlog drained, dupes collapsed.** Phases 1–4 (durable hardening) still open.
+**Status:** root cause proven. **Phase 0 (stop the bleed) + Phases 1–2 (durable fixes) SHIPPED TO PROD 2026-06-08.** Phases 3–4 (deeper architecture + alerting) remain as documented follow-ups.
 **Investigation:** 5-agent team (bot-side lifecycle, Atlas backend, destructive crons, live forensics, outage root-cause).
+
+---
+
+## 0b. Phases 1–2 shipped (2026-06-08)
+
+Deployed to the bot on acemagic via `botforge deploy kristina` (FRAMEWORK_SHA `9dc269a`, health-checked); branch `fix/kristina-task-loss-hardening-2026-06-08`, PR mpavlyukovskyy/botforge#13.
+
+- **`lib/deadline.js` — `normalizeDeadline()` chokepoint** wired into `create_task` + `update_task`: relative durations (`+2h`) parsed to ISO, unparseable values dropped to null. Poison can never enter the pipe again. +`lib/deadline.test.js` (vitest, 57/57 pass).
+- **`atlas-client.getItems` local fallback**: when the circuit is open / Atlas errors, serve the local SQLite mirror (shaped like Atlas items, flagged `_stale`) instead of `[]`. The brain's board never goes falsely empty during an outage — kills the "task removed → recreate duplicate" failure at its source.
+- **`board-state.js` staleness banner** + **`prompts/kristina.md` rule**: when degraded, the brain must NOT declare a task removed or recreate it.
+- Companion Atlas guard `toValidDate` already live on mp-atlas (Phase 0).
+
+**Uber-refund pair decision:** LEFT both copies (May 21 + May 25, 4 days apart — likely two distinct refunds). No deletion = no data loss; Mark can merge them if they're the same.
+
+**Still open (Phases 3–4):** quarantine-after-N-retries in `retrySyncPending`; alert when the circuit stays open > N min (this ran 3 days unnoticed); idempotency keys; soft-delete/tombstones; local SQLite as single source of truth. finance-app hotfix lives on branch `hotfix/kristina-deadline-coercion-2026-06-07` (no `main` in that repo — deploys from feature branches).
 
 ---
 

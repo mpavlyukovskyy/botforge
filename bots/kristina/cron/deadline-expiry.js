@@ -11,11 +11,19 @@
  */
 import { ensureDb, updateItem } from '../lib/atlas-client.js';
 import { computeDecayValue } from '../lib/decay.js';
+import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
 
 export default {
   name: 'deadline_expiry',
   async execute(ctx) {
     const db = ensureDb(ctx.config);
+
+    // Bleed-stopper: don't flag/notify ghosts; don't act when unverifiable.
+    const presence = await loadAtlasPresence(ctx);
+    if (shouldSkipRun(presence)) {
+      ctx.log.warn('deadline_expiry: Atlas unverifiable, skipping run');
+      return;
+    }
 
     // Find OPEN tasks past deadline not yet flagged
     const expired = db.prepare(
@@ -33,6 +41,7 @@ export default {
     ctx.log.info(`deadline_expiry: ${expired.length} tasks newly overdue`);
 
     for (const task of expired) {
+      if (presence.skip(task)) continue;
       const { value } = computeDecayValue(task.deadline);
       db.prepare(
         `UPDATE tasks

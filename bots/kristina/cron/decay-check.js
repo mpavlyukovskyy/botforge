@@ -14,6 +14,7 @@
  */
 import { ensureDb, updateItem } from '../lib/atlas-client.js';
 import { computeDecayValue } from '../lib/decay.js';
+import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
 
 const NOTIFY_THRESHOLDS = [0.10, 0.0, -1.0, -2.0, -3.0];
 
@@ -21,6 +22,14 @@ export default {
   name: 'decay_check',
   async execute(ctx) {
     const db = ensureDb(ctx.config);
+
+    // Bleed-stopper: never decay/notify a task Atlas no longer has, and don't
+    // act at all when Atlas can't be verified. See lib/presence.js.
+    const presence = await loadAtlasPresence(ctx);
+    if (shouldSkipRun(presence)) {
+      ctx.log.warn('decay_check: Atlas unverifiable, skipping run');
+      return;
+    }
 
     const tasks = db.prepare(
       `SELECT id, spok_id, title, deadline, current_value, notified_at, requester_chat_id
@@ -32,6 +41,7 @@ export default {
     ).all();
 
     for (const task of tasks) {
+      if (presence.skip(task)) continue;
       const { value } = computeDecayValue(task.deadline);
 
       // Update value if it has dropped
