@@ -20,10 +20,15 @@
 - **DR-15 requester filter:** unify in `getBoardView`; route commands + record_deduction + create_task through it too.
 - **DR-16 Fly rollback:** record `flyctl releases -a mp-atlas` previous image before each backend deploy; 5–10 min monitor per deploy.
 
+## EXECUTION STATUS (2026-06-09)
+- ✅ **Phase 0.0 (bleed-stopper) — DONE, LIVE, VERIFIED.** `lib/presence.js` + guards in decay_check/deadline_expiry/nudge_send/nudge_deductions; flag `KRISTINA_EXCLUDE_ABSENT` (default on). 64 bot tests green (7 new). Deployed kristina (FRAMEWORK_SHA `f449571`), health 200, no cron import errors. Confirmed "Login to HSBC" ghost (local OPEN+OVERDUE, absent from Atlas in all statuses) will now be skipped by every financial/nudge cron. **Active money-loss + ghost-nudge bleed is stopped.** Branch `fix/kristina-atlas-truth-fundamental`, commit `f449571`.
+  - NOTE: hit + worked around a botforge build non-idempotency bug — `build()` does not clean `dist/<bot>` first, so a stale `dist/kristina/lib` (missing new files + a nested `lib/lib`) shipped on the first deploy; `rm -rf dist/kristina` before deploy fixed it. **Follow-up: make build.ts clean the dist dir.**
+- ⛔ **Phase 0.1+ BLOCKED (2026-06-09):** Fly MPG proxy to `mp-finance-db` (cluster `d1zj5omg7q3oyqkv`, org `personal`) is unavailable — `tunnel unavailable … Fly.io API timed out`. Cannot get `prisma migrate status`, cannot take the gating DB backup, cannot run the schema migration. Phases 1–5 (Atlas-as-truth re-architecture) resume once prod-DB connectivity is healthy. The bleed-stopper holds the line until then.
+
 ## FINAL ordered sequence (each: implement → test → deploy → verify; reversible)
 
 **Phase 0 — Stop the bleed + ground truth**
-- 0.0 **Bleed-stopper** (bot, flag `excludeAtlasAbsentTasks` default ON): crons skip local rows whose `spok_id` 404s on Atlas. +test. Deploy kristina. Verify the 7 ghosts stop nudging/charging.
+- 0.0 **Bleed-stopper** (bot, flag `excludeAtlasAbsentTasks` default ON): crons skip local rows whose `spok_id` 404s on Atlas. +test. Deploy kristina. Verify the 7 ghosts stop nudging/charging. ✅ DONE.
 - 0.1 Fly MPG proxy; **verified DB backup**; `prisma migrate status` on mp-atlas; capture.
 - 0.2 Add handoff cols to schema.prisma + commit orphan migration; resolve drift to clean status (branch on applied/pending).
 - 0.3 Snapshot local DB + Atlas board (forensic baseline).
