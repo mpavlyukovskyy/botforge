@@ -46,6 +46,7 @@ FLEET=(
   "chief-of-staff:botforge-chief-of-staff:8091:/api/health"
   "trainer:botforge-trainer:8092:/api/health"
   "taskbot:taskbot:8088:/api/health"
+  "babushka:babushka-stories:8085:/health"
 )
 
 send_tg() {
@@ -55,7 +56,7 @@ send_tg() {
 }
 
 if [ "${1:-}" = "--selftest" ]; then
-  send_tg "🔧 fleet-watchdog selftest OK @ ${NOW_UTC} (monitoring: hali99, chief-of-staff, trainer, taskbot)"
+  send_tg "🔧 fleet-watchdog selftest OK @ ${NOW_UTC} (monitoring: hali99, chief-of-staff, trainer, taskbot, babushka)"
   echo "selftest sent"
   exit 0
 fi
