@@ -60,6 +60,10 @@ const createTask = {
       subtasks,
       requester,
       requesterChatId: ctx.chatId,
+      // Idempotency key: a retried/replayed POST with this externalId returns
+      // the existing Atlas row instead of creating a duplicate (the duplicate
+      // class the 2026-06 incidents kept hitting). externalId == local id.
+      externalId: taskId,
     });
 
     // Save locally

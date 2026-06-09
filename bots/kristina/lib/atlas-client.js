@@ -299,6 +299,29 @@ export async function fetchAtlasLiveIds(ctx) {
   }
 }
 
+/**
+ * Full-truth reconcile snapshot: every Atlas task (all statuses, all billing
+ * months, INCLUDING soft-deleted tombstones). Used by reconcile() to make the
+ * local cache exactly equal Atlas. Raw — never falls back to local cache.
+ * Returns the items array on success, or null when Atlas is unverifiable
+ * (circuit open / fetch failed) so reconcile can safe-abort instead of reaping.
+ */
+export async function fetchAtlasSnapshot(ctx) {
+  if (isCircuitOpen()) return null;
+  try {
+    const { endpoint } = getAtlasConfig(ctx);
+    const resp = await atlasFetch(ctx, `${endpoint}?all=1&includeDeleted=1`, {}, 20_000);
+    if (!resp.ok) throw new Error(`snapshot fetch failed: ${resp.status}`);
+    const data = await resp.json();
+    recordSuccess();
+    return (data.items || []).map(i => ({ ...i, columnName: i.column?.name || i.columnName || '' }));
+  } catch (err) {
+    ctx.log?.warn?.(`[atlas] fetchAtlasSnapshot failed: ${err}`);
+    recordFailure();
+    return null;
+  }
+}
+
 export async function createItem(ctx, data) {
   if (isCircuitOpen()) {
     ctx.log.warn('[atlas] Circuit open, saving locally only');
@@ -490,6 +513,10 @@ export async function retrySyncPending(ctx) {
       subtasks: subtasks.length > 0 ? subtasks : undefined,
       requester: task.requester || undefined,
       requesterChatId: task.requester_chat_id || undefined,
+      // Idempotency: if this task already reached Atlas on a prior attempt
+      // whose response was lost, the upsert-on-externalId returns that row
+      // instead of duplicating. externalId == local id.
+      externalId: task.id,
     });
 
     if (result) {
