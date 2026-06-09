@@ -67,7 +67,8 @@ export default {
       try {
         await ctx.adapter.send({
           chatId: task.requester_chat_id,
-          text: `Need an update on *${task.title}* — what's the status? ($0.10 deduction at 7pm if no reply)`,
+          // Embed a resolvable id so a reply resolves to THIS task by id.
+          text: `Need an update on *${task.title}* (ID:${(task.spok_id || task.id).slice(0, 8)}) — what's the status? ($0.10 deduction at 7pm if no reply)`,
           parseMode: 'Markdown',
         });
         sent++;

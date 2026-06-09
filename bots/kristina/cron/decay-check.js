@@ -56,15 +56,19 @@ export default {
       if (newThreshold === undefined) continue;
 
       if (task.requester_chat_id) {
+        // Embed a resolvable id (matches board ID:<prefix>) so a reply like
+        // "done" resolves to THIS task instead of a fuzzy title match — the
+        // coherence gap behind "I can't find that task" (incident 2026-06-09).
+        const ref = `(ID:${(task.spok_id || task.id).slice(0, 8)})`;
         try {
           await ctx.adapter.send({
             chatId: task.requester_chat_id,
             text:
               newThreshold > 0
-                ? `⚠️ "${task.title}" is at $${value.toFixed(2)} (was worth $1.00). Mark done soon.`
+                ? `⚠️ "${task.title}" ${ref} is at $${value.toFixed(2)} (was worth $1.00). Mark done soon.`
                 : newThreshold === 0
-                  ? `❌ "${task.title}" hit $0.00. Past this point it goes negative.`
-                  : `📉 "${task.title}" at -$${Math.abs(value).toFixed(2)}. Consider cancelling or handing off.`,
+                  ? `❌ "${task.title}" ${ref} hit $0.00. Past this point it goes negative.`
+                  : `📉 "${task.title}" ${ref} at -$${Math.abs(value).toFixed(2)}. Consider cancelling or handing off.`,
           });
         } catch (err) {
           ctx.log.warn(`decay_check: send failed to ${task.requester_chat_id}: ${err}`);
