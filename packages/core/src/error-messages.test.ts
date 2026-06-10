@@ -159,7 +159,7 @@ test('maybeNotifyAdmin alerts ONLY for admin-actionable classes', async () => {
       const { adapter, sent } = makeAdapter();
       await maybeNotifyAdmin({ errorClass: c, errMsg: 'boom', botName: 'Kristina', adapter, store: new Map(), log: noopLog });
       assert.equal(sent.length, 1, `${c} should alert`);
-      assert.equal(sent[0].chatId, '999');
+      assert.equal(sent[0]!.chatId, '999');
     }
     const SILENT: ErrorClass[] = ['rate_limited', 'overloaded', 'brain_timeout', 'network', 'server_error', 'context_too_long', 'tool_error', 'db_error', 'unknown'];
     for (const c of SILENT) {
@@ -177,8 +177,8 @@ test('maybeNotifyAdmin throttles repeats (30 min) + credit_balance carries the c
     await maybeNotifyAdmin({ errorClass: 'credit_balance', errMsg: 'low', botName: 'Kristina', adapter, store, log: noopLog });
     await maybeNotifyAdmin({ errorClass: 'credit_balance', errMsg: 'low', botName: 'Kristina', adapter, store, log: noopLog });
     assert.equal(sent.length, 1, 'second alert within 30 min must be throttled');
-    assert.match(sent[0].text, /console\.anthropic\.com/i, 'admin alert should include the fix hint');
-    assert.match(sent[0].text, /credit_balance/);
+    assert.match(sent[0]!.text, /console\.anthropic\.com/i, 'admin alert should include the fix hint');
+    assert.match(sent[0]!.text, /credit_balance/);
   });
 });
 

@@ -52,8 +52,8 @@ describe('MockAdapter — message routing', () => {
     await mock.inject({ chatId: 'chat-A', text: 'a' });
     await mock.inject({ chatId: 'chat-B', text: 'b' });
     assert.equal(mock.sent.length, 2);
-    assert.equal(mock.sent[0].chatId, 'chat-A');
-    assert.equal(mock.sent[1].chatId, 'chat-B');
+    assert.equal(mock.sent[0]!.chatId, 'chat-A');
+    assert.equal(mock.sent[1]!.chatId, 'chat-B');
   });
 });
 
@@ -64,8 +64,8 @@ describe('MockAdapter — outgoing surface', () => {
     assert.equal(id1, 'mock-msg-1');
     assert.equal(id2, 'mock-msg-2');
     assert.equal(mock.sent.length, 2);
-    assert.equal(mock.sent[0].text, 'one');
-    assert.equal(mock.sent[1].text, 'two');
+    assert.equal(mock.sent[0]!.text, 'one');
+    assert.equal(mock.sent[1]!.text, 'two');
   });
 
   it('edit, delete, setMessageReaction, sendChatAction all log to their respective arrays', async () => {
@@ -75,10 +75,10 @@ describe('MockAdapter — outgoing surface', () => {
     await mock.sendChatAction('chat-x', 'typing');
 
     assert.equal(mock.edits.length, 1);
-    assert.equal(mock.edits[0].patch.text, 'updated');
+    assert.equal(mock.edits[0]!.patch.text, 'updated');
     assert.equal(mock.deletes.length, 1);
-    assert.equal(mock.reactions[0].emoji, '👍');
-    assert.equal(mock.chatActions[0].action, 'typing');
+    assert.equal(mock.reactions[0]!.emoji, '👍');
+    assert.equal(mock.chatActions[0]!.action, 'typing');
   });
 });
 
