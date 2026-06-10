@@ -34,8 +34,8 @@ Extend `TaskItemStatus` enum (+IN_PROGRESS, +WAITING) — NO new `lane` axis; re
 **S8 — Phase E: milestones. ✅ SHIPPED (2026-06-10).**
 `parentTaskId`/`isProject`/`valueShare` (weight); child earned = parentTieredValue × (share/Σshares) × decay (PARTITION, never multiply); project container earns 0; project rollup in board_state (open-milestone count, containers excluded from Top 3). `decompose` tool (owner-or-Mark). Migration `20260610230000_add_milestones` applied to prod (additive). 133 bot tests green incl. milestone-partition (3x project split into 3 = 3 total not 9; unequal shares proportional; container=0). Flag still OFF.
 
-**S9 — Dashboard full surface.**
-4-lane board (To Do/In Progress/Waiting/Done), WIP indicator (client-enforced before optimistic move; structured rejection, no silent catch), reopen/excellent buttons (Mark-only), scoreboard (pool/streak/wins/biggest-save, replaces loss-ledger), budget meter. Built on S1's typed mapper.
+**S9 — Dashboard full surface. ✅ SHIPPED (2026-06-10).**
+Server-side INCENTIVE_V2 read → `incentiveV2` prop. v2 scoreboard (pool/wins/on-time%/biggest win + live WIP gauge, replaces loss-ledger framing); WIP-limit (3) enforced on drag before any optimistic move (visible structured rejection, NOT a silent catch); Mark-only quality lever in the task detail sheet — **Rework** (clears pay + bonus, moves to In Progress; bot reconcile resets the local has_earned latch so a redo re-earns) and **Mark excellent** (idempotent 1.15× bonus, rebases off the un-bonused value so toggling restores base). New `qualityMult` Decimal (additive, default 1.0 = neutral) + `reopenTask`/`markTaskExcellent` server actions (single-user app → requireAuth == Mark). Waiting (S6) + Project (S8) card badges. Bot earning multiplies by quality_mult; reconcile carries it. Migration `20260610234500_add_quality_mult` applied to prod. 140 bot tests green (+7); finance-app tsc clean. Flag still OFF → byte-identical to today.
 
 **S10 — Cutover.** Flip `INCENTIVE_V2` on → announced. Update Kristina's guide to cover pay (the only point pay is mentioned to her).
 
