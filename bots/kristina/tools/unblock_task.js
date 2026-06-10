@@ -24,10 +24,14 @@ const unblockTask = {
     // Compute elapsed blocked seconds in SQLite's own (UTC) frame to avoid the
     // SQLite-datetime(UTC) vs JS-Date(local) parsing skew.
     const row = db.prepare(
-      "SELECT blocked_at, blocked_seconds_total, CAST((julianday('now') - julianday(blocked_at)) * 86400 AS INTEGER) AS elapsed FROM tasks WHERE id = ?"
+      "SELECT blocked_at, blocked_on, blocked_seconds_total, CAST((julianday('now') - julianday(blocked_at)) * 86400 AS INTEGER) AS elapsed FROM tasks WHERE id = ?"
     ).get(task.id);
     if (!row?.blocked_at) return `"${task.title}" isn't blocked.`;
-    const blockedSecs = Math.max(0, row.elapsed || 0);
+    // Only credit decay-pause time for waits that aren't the assistant's fault
+    // (blocked on Mark or an external vendor). Self-declared INTERNAL blocks do
+    // NOT pause the clock — otherwise self-blocking would be a free decay-freeze.
+    const credits = row.blocked_on === 'MARK' || row.blocked_on === 'VENDOR';
+    const blockedSecs = credits ? Math.max(0, row.elapsed || 0) : 0;
     const total = (row.blocked_seconds_total || 0) + blockedSecs;
     db.prepare("UPDATE tasks SET blocked_at = NULL, blocked_on = NULL, blocked_seconds_total = ?, updated_at = datetime('now') WHERE id = ?")
       .run(total, task.id);

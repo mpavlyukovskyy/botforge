@@ -27,11 +27,16 @@ const DECAY_WINDOW_WORKING_HOURS = 20;
  *   - tenthsElapsed: 0-10, how many tenths of the 20h decay window have passed
  *   - daysOverdue: working hours overdue / 10 (one "session" = 10 working hours)
  */
-export function computeDecayValue(deadlineIso, now) {
-  const end = DateTime.fromISO(deadlineIso, { zone: TIMEZONE }).endOf('day');
+export function computeDecayValue(deadlineIso, now, blockedSeconds = 0) {
+  // S7: credit time the task spent blocked on Mark/a vendor by pushing the
+  // effective deadline forward — so being stuck on someone else doesn't decay
+  // the value. Default 0 == no shift (OFF-safe; only set once a task was blocked).
+  const end = DateTime.fromISO(deadlineIso, { zone: TIMEZONE })
+    .endOf('day')
+    .plus({ seconds: blockedSeconds || 0 });
   const current = now || DateTime.now().setZone(TIMEZONE);
 
-  // Before/at deadline: full bounty
+  // Before/at (blocked-adjusted) deadline: full bounty
   if (current <= end) {
     return { value: BOUNTY_USD, tenthsElapsed: 0, daysOverdue: 0 };
   }

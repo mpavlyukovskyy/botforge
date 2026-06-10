@@ -18,7 +18,7 @@ beforeEach(() => {
     id TEXT PRIMARY KEY, spok_id TEXT, title TEXT, status TEXT DEFAULT 'OPEN',
     earned_status TEXT, current_value REAL, deadline TEXT, handed_off_at TEXT,
     handed_off_note TEXT, overdue_notified_at TEXT, done_synced INTEGER DEFAULT 0,
-    has_earned INTEGER DEFAULT 0, priority_tier TEXT DEFAULT 'STANDARD',
+    has_earned INTEGER DEFAULT 0, priority_tier TEXT DEFAULT 'STANDARD', blocked_seconds_total INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
    CREATE TABLE deductions (id TEXT PRIMARY KEY, amount REAL, reason TEXT, requester TEXT,
     requester_chat_id TEXT, billing_month TEXT, created_at TEXT, reversed_at TEXT);`);

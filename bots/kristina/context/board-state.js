@@ -60,7 +60,7 @@ export default {
             // Surface the live decay value the nudge/deduction crons act on, so
             // the brain sees the same lifecycle state (it was blind to this —
             // it could nudge-reply about a value it couldn't see).
-            const { value } = computeDecayValue(item.deadline);
+            const { value } = computeDecayValue(item.deadline, undefined, item.blockedSecondsTotal || 0);
             entry += value >= 0 ? ` [OVERDUE $${value.toFixed(2)}]` : ` [OVERDUE -$${Math.abs(value).toFixed(2)}]`;
             overdueCount++;
           }

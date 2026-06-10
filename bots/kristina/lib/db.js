@@ -202,7 +202,7 @@ export function markTaskDoneLocally(ctx, taskId) {
   }
 
   const row = db.prepare(
-    'SELECT deadline, created_at, handed_off_at, priority_tier FROM tasks WHERE id = ?'
+    'SELECT deadline, created_at, handed_off_at, priority_tier, blocked_seconds_total FROM tasks WHERE id = ?'
   ).get(taskId);
 
   let earnedValue = 1.0;
@@ -215,7 +215,7 @@ export function markTaskDoneLocally(ctx, taskId) {
       earnedValue = 1.0;
       financialNote = '+$1.00 (handed off on time)';
     } else {
-      const { value, daysOverdue: dOver } = computeDecayValue(row.deadline);
+      const { value, daysOverdue: dOver } = computeDecayValue(row.deadline, undefined, row.blocked_seconds_total || 0);
       earnedValue = value;
       daysOverdue = dOver;
       if (value >= 1.0) {

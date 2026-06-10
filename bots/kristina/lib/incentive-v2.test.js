@@ -55,3 +55,20 @@ describe('computeDecayValue — $0 floor gated by INCENTIVE_V2', () => {
     expect(value).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('computeDecayValue — S7 blocked-interval credit', () => {
+  it('crediting enough blocked seconds pushes the effective deadline past now → full value', () => {
+    setFlagsCache({});
+    const now = DateTime.fromISO('2026-06-10T20:00', { zone: TIMEZONE });
+    const overdueNoCredit = computeDecayValue('2026-06-08', now).value;
+    // Credit 10 days of blocked time → effective deadline well past `now` → full $1
+    const withCredit = computeDecayValue('2026-06-08', now, 10 * 86400).value;
+    expect(withCredit).toBe(1);
+    expect(withCredit).toBeGreaterThan(overdueNoCredit);
+  });
+  it('default 0 blocked seconds == no shift (OFF-safe)', () => {
+    const now = DateTime.fromISO('2026-06-10T20:00', { zone: TIMEZONE });
+    expect(computeDecayValue('2026-06-08', now).value)
+      .toBe(computeDecayValue('2026-06-08', now, 0).value);
+  });
+});

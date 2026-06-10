@@ -220,7 +220,7 @@ function getLocalItems(ctx, opts = {}) {
     const params = [];
     if (opts.status) { where.push('status = ?'); params.push(opts.status); }
     if (opts.columnId) { where.push('column_id = ?'); params.push(opts.columnId); }
-    const sql = `SELECT id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, requester, priority_tier, blocked_at, blocked_on
+    const sql = `SELECT id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, requester, priority_tier, blocked_at, blocked_on, blocked_seconds_total
                  FROM tasks ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at`;
     items = db.prepare(sql).all(...params).map(r => ({
       // Prefer the Atlas id so board IDs match the synced board; fall back to
@@ -238,6 +238,7 @@ function getLocalItems(ctx, opts = {}) {
       priorityTier: r.priority_tier || 'STANDARD',
       blockedAt: r.blocked_at || null,
       blockedOn: r.blocked_on || null,
+      blockedSecondsTotal: r.blocked_seconds_total || 0,
     }));
   } catch (err) {
     ctx.log.error(`[atlas] Local fallback read failed: ${err}`);

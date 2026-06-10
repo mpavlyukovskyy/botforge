@@ -43,7 +43,7 @@ export default {
     }
 
     const tasks = db.prepare(
-      `SELECT id, spok_id, title, deadline, current_value, notified_at, requester_chat_id
+      `SELECT id, spok_id, title, deadline, current_value, notified_at, requester_chat_id, blocked_seconds_total
          FROM tasks
         WHERE status = 'OPEN'
           AND earned_status = 'OVERDUE'
@@ -54,7 +54,7 @@ export default {
 
     for (const task of tasks) {
       if (presence.skip(task)) continue;
-      const { value } = computeDecayValue(task.deadline);
+      const { value } = computeDecayValue(task.deadline, undefined, task.blocked_seconds_total || 0);
 
       // Update value if it has dropped
       if (value !== task.current_value) {
