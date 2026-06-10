@@ -33,6 +33,10 @@ export function runMigrations(ctx) {
   try { db.exec("ALTER TABLE deductions ADD COLUMN contest_note TEXT"); } catch {}
   // S5: has_earned — set on first completion; gates re-pay on reopen->redo.
   try { db.exec("ALTER TABLE tasks ADD COLUMN has_earned INTEGER DEFAULT 0"); } catch {}
+  // S6: blocked/waiting state (excluded from nudges/decay while set).
+  try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_at TEXT"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_on TEXT"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_seconds_total INTEGER DEFAULT 0"); } catch {}
 
   // callback_tracking table
   db.exec(`
@@ -169,7 +173,7 @@ export function isAdmin(ctx) {
 export function findTaskByIdPrefix(ctx, idPrefix) {
   const db = ensureDb(ctx.config);
   return db.prepare(
-    'SELECT id, spok_id, title, column_name, deadline, status, earned_status, current_value, handed_off_at, handed_off_note FROM tasks WHERE id LIKE ? OR spok_id LIKE ?'
+    'SELECT id, spok_id, title, column_name, deadline, status, earned_status, current_value, handed_off_at, handed_off_note, requester_chat_id, blocked_at FROM tasks WHERE id LIKE ? OR spok_id LIKE ?'
   ).get(`${idPrefix}%`, `${idPrefix}%`);
 }
 

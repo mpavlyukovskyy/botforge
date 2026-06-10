@@ -48,7 +48,8 @@ export default {
         WHERE status = 'OPEN'
           AND earned_status = 'OVERDUE'
           AND deadline IS NOT NULL
-          AND handed_off_at IS NULL`
+          AND handed_off_at IS NULL
+          AND blocked_at IS NULL`
     ).all();
 
     for (const task of tasks) {

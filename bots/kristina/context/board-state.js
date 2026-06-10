@@ -52,6 +52,7 @@ export default {
 
         const tag = tierTag(item.priorityTier);
         let entry = `- ID:${item.id.slice(0, 8)} | ${tag ? tag + ' ' : ''}${item.title}`;
+        if (item.blockedAt) entry += ` | ⏸ waiting on ${item.blockedOn || 'someone'}`;
         if (item.assignee) entry += ` | @${item.assignee}`;
         if (item.deadline) {
           entry += ` | due:${item.deadline}`;
@@ -71,7 +72,7 @@ export default {
       // not-done items. Gives the brain (and Kristina) an at-a-glance focus list
       // so high-tier / due-soon work is worked first.
       let text = '';
-      const active = filtered.filter(i => i.status !== 'DONE' && (i.columnName || '') !== 'Done');
+      const active = filtered.filter(i => i.status !== 'DONE' && (i.columnName || '') !== 'Done' && !i.blockedAt);
       if (active.length > 0) {
         const top = [...active].sort((a, b) => rankScore(b, now) - rankScore(a, now)).slice(0, 3);
         text += 'Today\'s Top 3 (by priority \u00d7 urgency):\n';

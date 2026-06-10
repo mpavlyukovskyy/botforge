@@ -43,6 +43,7 @@ export default {
           AND datetime(deadline) < datetime('now')
           AND (earned_status IS NULL OR earned_status NOT IN ('OVERDUE','CANCELLED','EARNED','PENALTY'))
           AND handed_off_at IS NULL
+          AND blocked_at IS NULL
           AND overdue_notified_at IS NULL`
     ).all();
 

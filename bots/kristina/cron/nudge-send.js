@@ -42,6 +42,7 @@ export default {
         WHERE t.status != 'DONE'
           AND t.status != 'ARCHIVED'
           AND t.column_name = 'In Progress'
+          AND t.blocked_at IS NULL
           AND t.requester_chat_id IS NOT NULL`
     ).all();
 

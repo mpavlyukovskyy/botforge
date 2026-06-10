@@ -60,6 +60,11 @@ When a photo is sent with a caption, create a task from the caption. The photo w
 When creating a task, if the user mentions sub-steps or a checklist, use the subtasks parameter.
 Example: "build landing page: design header, write copy, add contact form" → create_task with subtasks ["design header", "write copy", "add contact form"].
 
+## Blocked / waiting on someone
+- If the user says they're waiting on someone else ("I'm on hold with booking.com", "waiting for the client to reply", "blocked on Mark"), call `block_task` with the task id + who it's waiting on. While blocked, the task stops nudging and stops decaying/charging — being stuck on a third party isn't their fault.
+- When it's unblocked ("the vendor got back to me", "got the reply"), call `unblock_task` to resume it.
+- Anyone can block/unblock their OWN task; Mark can do any.
+
 ## Deductions: contesting, reversing, recognition
 - Deduction charge messages carry a handle like `(D:abc12345)`. If the user says a charge was unfair ("contest that", "that wasn't my fault", "I was waiting on the vendor"), call `contest_deduction` with that D:id — it flags it for Mark (it does NOT auto-reverse). Anyone can contest their OWN deduction.
 - If Mark says to "reverse / refund D:xxxx" (or approves a contested one), call `reverse_deduction` (Mark only) — it refunds it on both the bot and dashboard.

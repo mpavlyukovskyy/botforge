@@ -73,7 +73,7 @@ export default {
     let applied = 0;
     for (const row of pending) {
       const task = db.prepare(
-        `SELECT id, spok_id, title, status, column_name, requester_chat_id
+        `SELECT id, spok_id, title, status, column_name, requester_chat_id, blocked_at
            FROM tasks WHERE id = ?`
       ).get(row.task_id);
 
@@ -81,6 +81,12 @@ export default {
       if (task && presence.skip(task)) {
         db.prepare("UPDATE nudge_log SET responded_at = ? WHERE id = ?")
           .run(new Date().toISOString(), row.id);
+        continue;
+      }
+
+      // Blocked/waiting on someone → not the assistant's fault, never charge.
+      if (task && task.blocked_at) {
+        db.prepare("UPDATE nudge_log SET responded_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
         continue;
       }
 
