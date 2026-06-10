@@ -21,7 +21,8 @@ beforeEach(() => {
     current_value REAL, deadline TEXT, created_at TEXT, handed_off_at TEXT, handed_off_note TEXT,
     overdue_notified_at TEXT, done_synced INTEGER DEFAULT 0, has_earned INTEGER DEFAULT 0,
     priority_tier TEXT DEFAULT 'STANDARD', blocked_seconds_total INTEGER DEFAULT 0,
-    parent_task_id TEXT, is_project INTEGER DEFAULT 0, value_share INTEGER DEFAULT 1,  updated_at TEXT);`);
+    parent_task_id TEXT, is_project INTEGER DEFAULT 0, value_share INTEGER DEFAULT 1,
+    quality_mult REAL DEFAULT 1.0,  updated_at TEXT);`);
   flagOn = false;
 });
 
@@ -52,5 +53,31 @@ describe('markTaskDoneLocally — tier multiplier (S5)', () => {
     flagOn = true;
     // even though status is OPEN (reopened), has_earned=1 => return frozen 8.0, no 8x-again
     expect(markTaskDoneLocally(ctx, 't1').earnedValue).toBe(8.0);
+  });
+});
+
+describe('markTaskDoneLocally — quality multiplier (S9)', () => {
+  it('ON: quality_mult 1.15 gives a 15% bonus on the tiered value (STANDARD 1.0 → 1.15)', () => {
+    db.prepare("INSERT INTO tasks (id, status, priority_tier, quality_mult) VALUES ('q1','OPEN','STANDARD',1.15)").run();
+    flagOn = true;
+    expect(markTaskDoneLocally(ctx, 'q1').earnedValue).toBe(1.15);
+  });
+
+  it('ON: excellent stacks on the tier (IMPORTANT 3x × 1.15 = 3.45)', () => {
+    db.prepare("INSERT INTO tasks (id, status, priority_tier, quality_mult) VALUES ('q2','OPEN','IMPORTANT',1.15)").run();
+    flagOn = true;
+    expect(markTaskDoneLocally(ctx, 'q2').earnedValue).toBe(3.45);
+  });
+
+  it('ON: default quality_mult 1.0 leaves the value unchanged', () => {
+    db.prepare("INSERT INTO tasks (id, status, priority_tier, quality_mult) VALUES ('q3','OPEN','P0',1.0)").run();
+    flagOn = true;
+    expect(markTaskDoneLocally(ctx, 'q3').earnedValue).toBe(8.0);
+  });
+
+  it('OFF: quality_mult is ignored (plain $1.00 == today)', () => {
+    db.prepare("INSERT INTO tasks (id, status, priority_tier, quality_mult) VALUES ('q4','OPEN','P0',1.15)").run();
+    flagOn = false;
+    expect(markTaskDoneLocally(ctx, 'q4').earnedValue).toBe(1.0);
   });
 });

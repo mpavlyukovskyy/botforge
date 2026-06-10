@@ -58,11 +58,17 @@ export async function reconcile(ctx) {
     const findByCuid = db.prepare("SELECT id, spok_id FROM tasks WHERE spok_id = ?");
     const findByExt = db.prepare("SELECT id, spok_id FROM tasks WHERE id = ?");
     const insertRow = db.prepare(
-      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, current_value, requester, requester_chat_id, priority_tier, blocked_at, blocked_on, blocked_seconds_total, parent_task_id, is_project, value_share, synced_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`
+      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, current_value, requester, requester_chat_id, priority_tier, blocked_at, blocked_on, blocked_seconds_total, parent_task_id, is_project, value_share, quality_mult, synced_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`
     );
     const updateRow = db.prepare(
-      `UPDATE tasks SET spok_id = ?, title = ?, column_name = ?, column_id = ?, assignee = ?, deadline = ?, status = ?, earned_status = ?, current_value = ?, requester = ?, priority_tier = ?, blocked_at = ?, blocked_on = ?, blocked_seconds_total = ?, parent_task_id = ?, is_project = ?, value_share = ?, synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+      `UPDATE tasks SET spok_id = ?, title = ?, column_name = ?, column_id = ?, assignee = ?, deadline = ?, status = ?, earned_status = ?, current_value = ?, requester = ?, priority_tier = ?, blocked_at = ?, blocked_on = ?, blocked_seconds_total = ?, parent_task_id = ?, is_project = ?, value_share = ?, quality_mult = ?, synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+    );
+    // S9: when Atlas reopens a task (Mark's "reopen" button: status leaves DONE
+    // and earnedStatus clears), reset the local earning latch so a redo can
+    // re-earn. has_earned is local-only, so reconcile must clear it explicitly.
+    const resetEarnLatch = db.prepare(
+      "UPDATE tasks SET has_earned = 0 WHERE id = ? AND has_earned = 1"
     );
 
     let upserted = 0, inserted = 0, reaped = 0;
@@ -78,12 +84,15 @@ export async function reconcile(ctx) {
         const parentId = a.parentTaskId || null;
         const isProject = a.isProject ? 1 : 0;
         const valueShare = a.valueShare != null ? Number(a.valueShare) : 1;
+        const qualityMult = a.qualityMult != null ? Number(a.qualityMult) : 1.0;
         let localRow = findByCuid.get(a.id);
         if (!localRow && a.externalId) localRow = findByExt.get(a.externalId); // heal/link
         if (localRow) {
           updateRow.run(a.id, a.title, a.columnName || null, a.columnId || null, a.assignee || null,
             a.deadline || null, a.status, a.earnedStatus || null, earnedValue, a.requester || null, tier,
-            blockedAt, blockedOn, blockedSecs, parentId, isProject, valueShare, localRow.id);
+            blockedAt, blockedOn, blockedSecs, parentId, isProject, valueShare, qualityMult, localRow.id);
+          // Reopened (not DONE + no earned status) → clear the earn latch so a redo re-earns.
+          if (a.status !== 'DONE' && !a.earnedStatus) resetEarnLatch.run(localRow.id);
           upserted++;
         } else {
           // A task that exists in Atlas but not locally (e.g. created on the
@@ -91,7 +100,7 @@ export async function reconcile(ctx) {
           insertRow.run(a.externalId || a.id, a.id, a.title, a.columnName || null, a.columnId || null,
             a.assignee || null, a.deadline || null, a.status, a.earnedStatus || null, earnedValue,
             a.requester || null, a.requesterChatId || null, tier, blockedAt, blockedOn, blockedSecs,
-            parentId, isProject, valueShare);
+            parentId, isProject, valueShare, qualityMult);
           inserted++;
         }
       }

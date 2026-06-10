@@ -45,6 +45,7 @@ beforeEach(() => {
     current_value REAL, requester TEXT, requester_chat_id TEXT, priority_tier TEXT DEFAULT 'STANDARD',
     blocked_at TEXT, blocked_on TEXT, blocked_seconds_total INTEGER DEFAULT 0,
     parent_task_id TEXT, is_project INTEGER DEFAULT 0, value_share INTEGER DEFAULT 1,
+    quality_mult REAL DEFAULT 1.0, has_earned INTEGER DEFAULT 0,
     synced_at TEXT, created_at TEXT, updated_at TEXT);`);
   snapshotResult = [];
 });
@@ -117,6 +118,35 @@ describe('reconcile — learn + heal', () => {
     expect(row.status).toBe('DONE');
     expect(row.earned_status).toBe('EARNED');
     expect(row.current_value).toBe(1);
+  });
+});
+
+describe('reconcile — S9 quality lever + reopen latch', () => {
+  it('clears has_earned when Atlas reopens a task (Mark reopen → redo re-earns)', async () => {
+    // Local row already earned (DONE, has_earned=1). Mark clicks Reopen on the
+    // dashboard → Atlas now shows it OPEN with no earned status.
+    db.prepare("INSERT INTO tasks (id, spok_id, title, status, earned_status, has_earned) VALUES ('l1','cuid_1','t','DONE','EARNED',1)").run();
+    snapshotResult = [{ id: 'cuid_1', title: 't', status: 'OPEN', earnedStatus: null, qualityMult: '1.0' }];
+    await reconcile(ctx);
+    const row = bySpok('cuid_1');
+    expect(row.status).toBe('OPEN');
+    expect(row.has_earned).toBe(0); // latch reset → a redo can re-earn
+  });
+
+  it('does NOT clear has_earned for a still-earned task (Atlas DONE/EARNED)', async () => {
+    db.prepare("INSERT INTO tasks (id, spok_id, title, status, earned_status, has_earned) VALUES ('l1','cuid_1','t','DONE','EARNED',1)").run();
+    snapshotResult = [{ id: 'cuid_1', title: 't', status: 'DONE', earnedStatus: 'EARNED', earnedValue: '8.00' }];
+    await reconcile(ctx);
+    expect(bySpok('cuid_1').has_earned).toBe(1);
+  });
+
+  it('learns qualityMult and the bonused earnedValue from Atlas (excellent)', async () => {
+    db.prepare("INSERT INTO tasks (id, spok_id, title, status, earned_status, current_value, quality_mult) VALUES ('l1','cuid_1','t','DONE','EARNED',3.0,1.0)").run();
+    snapshotResult = [{ id: 'cuid_1', title: 't', status: 'DONE', earnedStatus: 'EARNED', earnedValue: '3.45', qualityMult: '1.15' }];
+    await reconcile(ctx);
+    const row = bySpok('cuid_1');
+    expect(row.current_value).toBe(3.45);
+    expect(row.quality_mult).toBe(1.15);
   });
 });
 

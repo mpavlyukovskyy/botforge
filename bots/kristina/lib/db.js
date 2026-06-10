@@ -41,6 +41,8 @@ export function runMigrations(ctx) {
   try { db.exec("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN is_project INTEGER DEFAULT 0"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN value_share INTEGER DEFAULT 1"); } catch {}
+  // S9: Mark's quality lever (set from the dashboard). 1.0 = neutral (== today).
+  try { db.exec("ALTER TABLE tasks ADD COLUMN quality_mult REAL DEFAULT 1.0"); } catch {}
 
   // callback_tracking table
   db.exec(`
@@ -206,7 +208,7 @@ export function markTaskDoneLocally(ctx, taskId) {
   }
 
   const row = db.prepare(
-    'SELECT deadline, created_at, handed_off_at, priority_tier, blocked_seconds_total, parent_task_id, is_project, value_share FROM tasks WHERE id = ?'
+    'SELECT deadline, created_at, handed_off_at, priority_tier, blocked_seconds_total, parent_task_id, is_project, value_share, quality_mult FROM tasks WHERE id = ?'
   ).get(taskId);
 
   // S8: a project container itself earns nothing — its milestones carry the value.
@@ -262,6 +264,13 @@ export function markTaskDoneLocally(ctx, taskId) {
       const mult = TIER_WEIGHT[row?.priority_tier || 'STANDARD'] ?? 1;
       earnedValue = Math.round(decayFraction * mult * 100) / 100;
       financialNote = `+$${earnedValue.toFixed(2)} (${row?.priority_tier || 'STANDARD'})`;
+    }
+    // S9 quality multiplier (Mark's lever, set from the dashboard). Default 1.0
+    // == no change. "excellent" = 1.15 bonus; a reopened task is reset to 1.0.
+    const qMult = row?.quality_mult != null ? Number(row.quality_mult) : 1.0;
+    if (qMult !== 1.0) {
+      earnedValue = Math.round(earnedValue * qMult * 100) / 100;
+      financialNote = `+$${earnedValue.toFixed(2)} (${qMult > 1 ? 'excellent' : 'quality'} ×${qMult})`;
     }
   }
 
