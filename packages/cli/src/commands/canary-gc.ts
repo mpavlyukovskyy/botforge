@@ -51,7 +51,7 @@ export async function canaryGc(opts: CanaryGcOptions = {}): Promise<void> {
       const content = execSync(`${ssh} "sudo cat ${overridePath} 2>/dev/null"`, { encoding: 'utf-8' });
       // Match the SHA in WorkingDirectory=/opt/botforge-fw/<sha12>
       const m = content.match(new RegExp(`${fwBaseDir.replace(/[/.]/g, '\\$&')}/([a-f0-9]+)`));
-      if (m) {
+      if (m?.[1]) {
         const sha12 = m[1];
         const list = referenced.get(sha12) ?? [];
         list.push(botName);

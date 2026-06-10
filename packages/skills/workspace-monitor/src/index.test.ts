@@ -84,8 +84,8 @@ describe('check thresholds', () => {
     await skill.init(makeCtx({ enabled: true, cap_usd: 10 }, 8.5));
     assert.equal(await skill.check(), 'warn');
     assert.equal(sentMessages.length, 1);
-    assert.match(sentMessages[0].text, /Workspace cap warning/);
-    assert.equal(sentMessages[0].chatId, 'admin-123');
+    assert.match(sentMessages[0]!.text, /Workspace cap warning/);
+    assert.equal(sentMessages[0]!.chatId, 'admin-123');
   });
 
   it('warn DM only fires once per day (re-check is no-op)', async () => {
@@ -99,7 +99,7 @@ describe('check thresholds', () => {
   it('at >= 100% returns exhausted and DMs admin', async () => {
     await skill.init(makeCtx({ enabled: true, cap_usd: 10 }, 11));
     assert.equal(await skill.check(), 'exhausted');
-    assert.match(sentMessages[0].text, /Workspace cap exhausted/);
+    assert.match(sentMessages[0]!.text, /Workspace cap exhausted/);
   });
 
   it('respects assumed_workspace_share — share=0.5, cap=20, spend=8.5 → 85% of share → warn', async () => {
@@ -110,6 +110,6 @@ describe('check thresholds', () => {
   it('explicit admin_chat_id overrides platform.chat_ids[0]', async () => {
     await skill.init(makeCtx({ enabled: true, cap_usd: 10, admin_chat_id: 'override-999' }, 11));
     await skill.check();
-    assert.equal(sentMessages[0].chatId, 'override-999');
+    assert.equal(sentMessages[0]!.chatId, 'override-999');
   });
 });

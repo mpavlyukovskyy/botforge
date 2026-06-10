@@ -61,9 +61,9 @@ describe('LocalTaskStore', () => {
     const todos = await store.query({ status: 'TODO' });
     const dones = await store.query({ status: 'DONE' });
     assert.equal(todos.length, 1);
-    assert.equal(todos[0].title, 'a');
+    assert.equal(todos[0]!.title, 'a');
     assert.equal(dones.length, 1);
-    assert.equal(dones[0].title, 'b');
+    assert.equal(dones[0]!.title, 'b');
   });
 
   it('query filters by column', async () => {
@@ -71,7 +71,7 @@ describe('LocalTaskStore', () => {
     await store.create({ title: 'b', column: 'In Progress' });
     const filtered = await store.query({ column: 'In Progress' });
     assert.equal(filtered.length, 1);
-    assert.equal(filtered[0].title, 'b');
+    assert.equal(filtered[0]!.title, 'b');
   });
 
   it('query respects limit', async () => {
@@ -89,7 +89,7 @@ describe('Tool factories', () => {
     assert.match(out, /Created task t/);
     const rows = await store.query();
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].title, 'hello');
+    assert.equal(rows[0]!.title, 'hello');
   });
 
   it('updateTaskTool wires status changes', async () => {

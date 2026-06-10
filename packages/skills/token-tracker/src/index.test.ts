@@ -82,8 +82,8 @@ describe('token-tracker — bot_name PK (regression for ON CONFLICT bug)', () =>
     await skill.recordUsage('claude-opus-4-6', 0.20);
     const summary = skill.getUsageSummary(1);
     assert.equal(summary.length, 1, 'one row, not two — ON CONFLICT must merge');
-    assert.equal(summary[0].call_count, 2);
-    assert.ok(Math.abs(summary[0].cost_cents - 30) < 0.01, 'cents summed (10 + 20)');
+    assert.equal(summary[0]!.call_count, 2);
+    assert.ok(Math.abs(summary[0]!.cost_cents - 30) < 0.01, 'cents summed (10 + 20)');
   });
 
   it('two different bots share the table without PK collisions', async () => {

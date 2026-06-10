@@ -89,11 +89,11 @@ describe('pruneLocal', () => {
     // Create an old backup dir + new one.
     const root = join(tmpDir, 'backups');
     mkdirSync(join(root, '2020-01-01'), { recursive: true });
-    mkdirSync(join(root, new Date().toISOString().split('T')[0]), { recursive: true });
+    mkdirSync(join(root, new Date().toISOString().split('T')[0]!), { recursive: true });
     await skill.init(makeCtx({ enabled: true, target_host: 'localhost', target_dir: '/tmp/bk', local_retention_days: 7 }));
     await skill.runOnce().catch(() => {});
     // We can't fully test prune in isolation (it's private + called inside runOnce).
     // Verify the recent dir still exists.
-    assert.ok(existsSync(join(root, new Date().toISOString().split('T')[0])));
+    assert.ok(existsSync(join(root, new Date().toISOString().split('T')[0]!)));
   });
 });

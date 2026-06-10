@@ -54,7 +54,7 @@ describe('DlqSkill', () => {
     dlq.add('xero-push', { orderId: 2 }, new Error('429'));
     const rows = dlq.listPending();
     assert.equal(rows.length, 2);
-    assert.equal(rows[0].status, 'pending');
+    assert.equal(rows[0]!.status, 'pending');
   });
 
   it('listPending filters by kind', async () => {
@@ -63,7 +63,7 @@ describe('DlqSkill', () => {
     dlq.add('xero-push', { orderId: 2 }, new Error('429'));
     const rows = dlq.listPending('xero-push');
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].kind, 'xero-push');
+    assert.equal(rows[0]!.kind, 'xero-push');
   });
 
   it('markReplayed removes a row from listPending', async () => {
@@ -98,7 +98,7 @@ describe('DlqSkill', () => {
     const bigPayload = 'x'.repeat(200_000);
     const bigError = new Error('y'.repeat(10_000));
     const id = dlq.add('x', bigPayload, bigError)!;
-    const row = dlq.listPending()[0];
+    const row = dlq.listPending()[0]!;
     assert.ok(row.payload.length <= 100_000);
     assert.ok(row.error.length <= 5000 + 20);
     void id;
