@@ -44,6 +44,7 @@ beforeEach(() => {
     assignee TEXT, deadline TEXT, status TEXT DEFAULT 'OPEN', earned_status TEXT,
     current_value REAL, requester TEXT, requester_chat_id TEXT, priority_tier TEXT DEFAULT 'STANDARD',
     blocked_at TEXT, blocked_on TEXT, blocked_seconds_total INTEGER DEFAULT 0,
+    parent_task_id TEXT, is_project INTEGER DEFAULT 0, value_share INTEGER DEFAULT 1,
     synced_at TEXT, created_at TEXT, updated_at TEXT);`);
   snapshotResult = [];
 });

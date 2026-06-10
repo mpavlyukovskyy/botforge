@@ -60,6 +60,10 @@ When a photo is sent with a caption, create a task from the caption. The photo w
 When creating a task, if the user mentions sub-steps or a checklist, use the subtasks parameter.
 Example: "build landing page: design header, write copy, add contact form" → create_task with subtasks ["design header", "write copy", "add contact form"].
 
+## Milestones / breaking down a big task
+- If a task is large or multi-step ("plan the offsite", "this is a big project, break it down into X, Y, Z"), call `decompose` with the parent task id + the milestone titles. The parent becomes a project; each milestone is a sub-task. They split the project's value (finishing all = the whole project's worth) — they don't multiply it.
+- Owner-or-Mark only.
+
 ## Blocked / waiting on someone
 - If the user says they're waiting on someone else ("I'm on hold with booking.com", "waiting for the client to reply", "blocked on Mark"), call `block_task` with the task id + who it's waiting on. While blocked, the task stops nudging and stops decaying/charging — being stuck on a third party isn't their fault.
 - When it's unblocked ("the vendor got back to me", "got the reply"), call `unblock_task` to resume it.

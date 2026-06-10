@@ -46,12 +46,28 @@ export default {
       const byColumn = {};
       let overdueCount = 0;
 
+      // Milestone rollup: count still-open milestones per project container so
+      // the brain can report "3 of 5 milestones left" without re-querying.
+      const openChildrenByParent = {};
+      for (const item of filtered) {
+        if (item.parentTaskId) {
+          const p = item.parentTaskId;
+          openChildrenByParent[p] = (openChildrenByParent[p] || 0) + 1;
+        }
+      }
+
       for (const item of filtered) {
         const col = item.columnName || 'Unassigned';
         if (!byColumn[col]) byColumn[col] = [];
 
         const tag = tierTag(item.priorityTier);
         let entry = `- ID:${item.id.slice(0, 8)} | ${tag ? tag + ' ' : ''}${item.title}`;
+        if (item.isProject) {
+          const open = openChildrenByParent[item.id] || 0;
+          entry += ` | 📦 project (${open} milestone${open === 1 ? '' : 's'} open)`;
+        } else if (item.parentTaskId) {
+          entry += ` | ↳ milestone`;
+        }
         if (item.blockedAt) entry += ` | ⏸ waiting on ${item.blockedOn || 'someone'}`;
         if (item.assignee) entry += ` | @${item.assignee}`;
         if (item.deadline) {
@@ -72,7 +88,7 @@ export default {
       // not-done items. Gives the brain (and Kristina) an at-a-glance focus list
       // so high-tier / due-soon work is worked first.
       let text = '';
-      const active = filtered.filter(i => i.status !== 'DONE' && (i.columnName || '') !== 'Done' && !i.blockedAt);
+      const active = filtered.filter(i => i.status !== 'DONE' && (i.columnName || '') !== 'Done' && !i.blockedAt && !i.isProject);
       if (active.length > 0) {
         const top = [...active].sort((a, b) => rankScore(b, now) - rankScore(a, now)).slice(0, 3);
         text += 'Today\'s Top 3 (by priority \u00d7 urgency):\n';

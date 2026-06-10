@@ -20,7 +20,8 @@ beforeEach(() => {
   db.exec(`CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT DEFAULT 'OPEN', earned_status TEXT,
     current_value REAL, deadline TEXT, created_at TEXT, handed_off_at TEXT, handed_off_note TEXT,
     overdue_notified_at TEXT, done_synced INTEGER DEFAULT 0, has_earned INTEGER DEFAULT 0,
-    priority_tier TEXT DEFAULT 'STANDARD', blocked_seconds_total INTEGER DEFAULT 0,  updated_at TEXT);`);
+    priority_tier TEXT DEFAULT 'STANDARD', blocked_seconds_total INTEGER DEFAULT 0,
+    parent_task_id TEXT, is_project INTEGER DEFAULT 0, value_share INTEGER DEFAULT 1,  updated_at TEXT);`);
   flagOn = false;
 });
 

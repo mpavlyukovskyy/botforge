@@ -37,6 +37,10 @@ export function runMigrations(ctx) {
   try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_at TEXT"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_on TEXT"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_seconds_total INTEGER DEFAULT 0"); } catch {}
+  // S8: milestones — child value partitions the parent's tiered value.
+  try { db.exec("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN is_project INTEGER DEFAULT 0"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN value_share INTEGER DEFAULT 1"); } catch {}
 
   // callback_tracking table
   db.exec(`
@@ -202,8 +206,14 @@ export function markTaskDoneLocally(ctx, taskId) {
   }
 
   const row = db.prepare(
-    'SELECT deadline, created_at, handed_off_at, priority_tier, blocked_seconds_total FROM tasks WHERE id = ?'
+    'SELECT deadline, created_at, handed_off_at, priority_tier, blocked_seconds_total, parent_task_id, is_project, value_share FROM tasks WHERE id = ?'
   ).get(taskId);
+
+  // S8: a project container itself earns nothing — its milestones carry the value.
+  if (getFlag('INCENTIVE_V2') && row?.is_project) {
+    db.prepare("UPDATE tasks SET status='DONE', earned_status='EARNED', current_value=0, has_earned=1, done_synced=0, updated_at=datetime('now') WHERE id=?").run(taskId);
+    return { earnedValue: 0, financialNote: 'project complete (value earned via its milestones)' };
+  }
 
   let earnedValue = 1.0;
   let financialNote = '+$1.00';
@@ -230,13 +240,29 @@ export function markTaskDoneLocally(ctx, taskId) {
     }
   }
 
-  // S5: v2 money model multiplies the (decay/handoff-aware) value by the
-  // priority tier (P0=8x ... ROUTINE=0.5x). OFF (default) == today (no tier
-  // weighting). Tier is Mark-set + clamped, so this can't be gamed by the doer.
+  // v2 money model (INCENTIVE_V2). OFF (default) == today (plain decay value).
   if (getFlag('INCENTIVE_V2')) {
-    const mult = TIER_WEIGHT[row?.priority_tier || 'STANDARD'] ?? 1;
-    earnedValue = Math.round(earnedValue * mult * 100) / 100;
-    financialNote = `+$${earnedValue.toFixed(2)} (${row?.priority_tier || 'STANDARD'})`;
+    // `earnedValue` here is the decay FRACTION (0..1) for this task's own
+    // timeliness. The base it scales depends on whether this is a milestone.
+    const decayFraction = earnedValue; // 1.0 on-time, <1 late, 0 floored
+    if (row?.parent_task_id) {
+      // S8: milestone earns a PARTITION of the parent's tiered value — never a
+      // multiple. base = parentTierWeight × (this.share / Σ sibling shares).
+      const parent = db.prepare(
+        'SELECT priority_tier FROM tasks WHERE id = ? OR spok_id = ?'
+      ).get(row.parent_task_id, row.parent_task_id);
+      const shareSum = db.prepare(
+        'SELECT COALESCE(SUM(value_share),0) AS s FROM tasks WHERE parent_task_id = ?'
+      ).get(row.parent_task_id).s || 1;
+      const parentMult = TIER_WEIGHT[parent?.priority_tier || 'STANDARD'] ?? 1;
+      const base = parentMult * ((row.value_share || 1) / shareSum);
+      earnedValue = Math.round(base * decayFraction * 100) / 100;
+      financialNote = `+$${earnedValue.toFixed(2)} (milestone)`;
+    } else {
+      const mult = TIER_WEIGHT[row?.priority_tier || 'STANDARD'] ?? 1;
+      earnedValue = Math.round(decayFraction * mult * 100) / 100;
+      financialNote = `+$${earnedValue.toFixed(2)} (${row?.priority_tier || 'STANDARD'})`;
+    }
   }
 
   db.prepare(
