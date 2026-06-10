@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { mkdirSync, copyFileSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, writeFileSync, rmSync } from 'node:fs';
 import { loadFleetConfig } from '../fleet.js';
 import { shortSha, validateSha } from './canary.js';
 
@@ -123,8 +123,12 @@ export function build(botName: string, opts: BuildOptions = {}): void {
   }
   const sha = frameworkSha;
 
-  // 2. Create dist directory
+  // 2. Create dist directory. Clean it first — `cp -r src dist/<bot>/dir` copies
+  //    INTO an existing dir (nesting lib/lib/) and leaves deleted files behind,
+  //    so a stale build ships unless we start from an empty tree. (This is why
+  //    deploys needed a manual `rm -rf dist/<bot>` beforehand.)
   const distDir = resolve(`dist/${botName}`);
+  rmSync(distDir, { recursive: true, force: true });
   mkdirSync(distDir, { recursive: true });
 
   // 3. Copy config

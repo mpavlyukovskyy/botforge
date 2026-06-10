@@ -12,6 +12,7 @@
  */
 import { DateTime } from 'luxon';
 import { computeWorkingHours, TIMEZONE } from './working-hours.js';
+import { getFlag } from './flags.js';
 
 const BOUNTY_USD = 1.0;
 const DECAY_WINDOW_WORKING_HOURS = 20;
@@ -26,18 +27,26 @@ const DECAY_WINDOW_WORKING_HOURS = 20;
  *   - tenthsElapsed: 0-10, how many tenths of the 20h decay window have passed
  *   - daysOverdue: working hours overdue / 10 (one "session" = 10 working hours)
  */
-export function computeDecayValue(deadlineIso, now) {
-  const end = DateTime.fromISO(deadlineIso, { zone: TIMEZONE }).endOf('day');
+export function computeDecayValue(deadlineIso, now, blockedSeconds = 0) {
+  // S7: credit time the task spent blocked on Mark/a vendor by pushing the
+  // effective deadline forward — so being stuck on someone else doesn't decay
+  // the value. Default 0 == no shift (OFF-safe; only set once a task was blocked).
+  const end = DateTime.fromISO(deadlineIso, { zone: TIMEZONE })
+    .endOf('day')
+    .plus({ seconds: blockedSeconds || 0 });
   const current = now || DateTime.now().setZone(TIMEZONE);
 
-  // Before/at deadline: full bounty
+  // Before/at (blocked-adjusted) deadline: full bounty
   if (current <= end) {
     return { value: BOUNTY_USD, tenthsElapsed: 0, daysOverdue: 0 };
   }
 
-  // Past deadline: linear from $1.00 → $0 over 20 working hours
+  // Past deadline: linear from $1.00 → $0 over 20 working hours.
   const overtimeHours = computeWorkingHours(end, current);
-  const value = Math.round((BOUNTY_USD - overtimeHours / DECAY_WINDOW_WORKING_HOURS) * 100) / 100;
+  let value = Math.round((BOUNTY_USD - overtimeHours / DECAY_WINDOW_WORKING_HOURS) * 100) / 100;
+  // v2 money model (INCENTIVE_V2): a late task FORFEITS its bounty but never
+  // goes into debt — floor at $0. Default OFF == today's negative-debt behavior.
+  if (getFlag('INCENTIVE_V2') && value < 0) value = 0;
   const tenthsElapsed = Math.min(Math.floor(overtimeHours / 2), 10);
   const daysOverdue = overtimeHours / 10; // 10 working hours = 1 "session"
 

@@ -13,6 +13,7 @@
 import { DateTime } from 'luxon';
 import { ensureDb } from '../lib/atlas-client.js';
 import { isWorkingDay, TIMEZONE } from '../lib/working-hours.js';
+import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
 
 const RECENT_ACTIVITY_MINUTES = 60;
 
@@ -28,17 +29,26 @@ export default {
 
     const db = ensureDb(ctx.config);
 
+    // Bleed-stopper: don't nudge ghosts / don't act on unverifiable state.
+    const presence = await loadAtlasPresence(ctx);
+    if (shouldSkipRun(presence)) {
+      ctx.log.warn('nudge_send: Atlas unverifiable, skipping run');
+      return;
+    }
+
     const tasks = db.prepare(
       `SELECT t.id, t.spok_id, t.title, t.requester_chat_id, t.updated_at
          FROM tasks t
         WHERE t.status != 'DONE'
           AND t.status != 'ARCHIVED'
           AND t.column_name = 'In Progress'
+          AND t.blocked_at IS NULL
           AND t.requester_chat_id IS NOT NULL`
     ).all();
 
     let sent = 0;
     for (const task of tasks) {
+      if (presence.skip(task)) continue;
       // Skip if nudged today already
       const existing = db.prepare(
         'SELECT id FROM nudge_log WHERE task_id = ? AND nudge_date = ?'
@@ -58,7 +68,8 @@ export default {
       try {
         await ctx.adapter.send({
           chatId: task.requester_chat_id,
-          text: `Need an update on *${task.title}* — what's the status? ($0.10 deduction at 7pm if no reply)`,
+          // Embed a resolvable id so a reply resolves to THIS task by id.
+          text: `Need an update on *${task.title}* (ID:${(task.spok_id || task.id).slice(0, 8)}) — what's the status? ($0.10 deduction at 7pm if no reply)`,
           parseMode: 'Markdown',
         });
         sent++;

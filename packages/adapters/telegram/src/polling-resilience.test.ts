@@ -7,7 +7,6 @@ import {
   onPollingError,
   onSuccessfulPoll,
   setPaused,
-  type ResilienceState,
 } from './polling-resilience.js';
 
 function fakeError(message: string, code?: string): Error {

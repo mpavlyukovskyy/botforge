@@ -1,9 +1,5 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { getFrameworkSha, _resetFrameworkShaCache } from './framework-info.js';
 
 const ORIG_ENV = process.env.BOTFORGE_FRAMEWORK_SHA;

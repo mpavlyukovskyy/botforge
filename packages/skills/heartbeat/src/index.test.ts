@@ -63,7 +63,7 @@ describe('pushCron', () => {
     }));
     await skill.pushCron('daily_digest');
     assert.equal(fetchedUrls.length, 1);
-    assert.match(fetchedUrls[0], /digest-token/);
+    assert.match(fetchedUrls[0]!, /digest-token/);
   });
 
   it('no-op when the named cron has no URL', async () => {

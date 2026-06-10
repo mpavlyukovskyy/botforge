@@ -16,7 +16,7 @@ describe('CallbackIdempotency', () => {
     await idem.wrap('q-2', async () => { runs++; });
     const second = await idem.wrap('q-2', async () => { runs++; });
     assert.equal(runs, 1, 'work should have run exactly once');
-    assert.ok('skipped' in second && second.skipped === 'duplicate');
+    assert.ok(typeof second === 'object' && 'skipped' in second && second.skipped === 'duplicate');
   });
 
   it('different queryIds do not interfere', async () => {
@@ -55,7 +55,7 @@ describe('CallbackIdempotency', () => {
     const slow = new Promise<void>((r) => { release = r; });
     const first = idem.wrap('q-conc', async () => { await slow; return 'first'; });
     const second = await idem.wrap('q-conc', async () => 'second');
-    assert.ok('skipped' in second);
+    assert.ok(typeof second === 'object' && 'skipped' in second);
     release();
     assert.equal(await first, 'first');
   });
@@ -73,6 +73,6 @@ describe('CallbackIdempotency', () => {
     await withCallbackIdempotency('q-singleton-1', async () => { runs++; });
     const second = await withCallbackIdempotency('q-singleton-1', async () => { runs++; });
     assert.equal(runs, 1);
-    assert.ok('skipped' in second);
+    assert.ok(typeof second === 'object' && second !== null && 'skipped' in second);
   });
 });

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { getColumns, findColumnByName, createItem, updateItem, ensureDb } from '../lib/atlas-client.js';
-import { getRegisteredChat } from '../lib/db.js';
+import { getRegisteredChat, isAdmin } from '../lib/db.js';
+import { normalizeDeadline } from '../lib/deadline.js';
+import { normalizeTier } from '../lib/tier.js';
 
 const createTask = {
   name: 'create_task',
@@ -12,11 +14,34 @@ const createTask = {
     deadline: z.string().optional().describe('Deadline as ISO date (YYYY-MM-DD)'),
     done: z.boolean().optional().describe('If true, create and immediately mark as done (places in Done column with DONE status)'),
     subtasks: z.array(z.string()).optional().describe('Checklist items / subtasks to create with the task'),
+    tier: z.string().optional().describe('Priority tier: ROUTINE | STANDARD | IMPORTANT | P0. Only Mark can set above STANDARD.'),
   },
   execute: async (args, ctx) => {
     const db = ensureDb(ctx.config);
     const taskId = crypto.randomUUID();
     const title = args.title;
+
+    // Dedup guard: structurally prevent the "recreate a task that already
+    // exists" duplicate class (e.g. the brain calling create_task instead of
+    // hand_off, or recreating a task it momentarily couldn't see — incidents
+    // 2026-06-07/09). If an OPEN task with the same normalized title already
+    // exists locally, don't create a second one; point the brain at it.
+    if (!args.done) {
+      const norm = title.trim().toLowerCase();
+      const existing = db.prepare(
+        "SELECT id, spok_id, column_name FROM tasks WHERE status = 'OPEN' AND lower(trim(title)) = ?"
+      ).get(norm);
+      if (existing) {
+        const shortId = (existing.spok_id || existing.id).slice(0, 8);
+        return `A task "${title}" already exists (ID:${shortId}${existing.column_name ? `, in ${existing.column_name}` : ''}). Not creating a duplicate — update or hand off that one instead if needed.`;
+      }
+    }
+
+    // Normalize the deadline before it touches Atlas or SQLite. The brain has
+    // emitted values like "+2h" that crash Atlas (Invalid Date → 500) and
+    // break local datetime() comparisons — normalizeDeadline yields a valid
+    // date string or null. See lib/deadline.js + the 2026-06-07 incident.
+    const deadline = normalizeDeadline(args.deadline);
     const columns = await getColumns(ctx);
 
     // Resolve column
@@ -45,21 +70,31 @@ const createTask = {
     const registered = getRegisteredChat({ config: ctx.config }, ctx.chatId, ctx.userId);
     const requester = registered?.requester_name || ctx.userName || 'Unknown';
 
+    // Priority tier is Mark's lever: clamp non-admins to STANDARD so an
+    // assistant can't self-assign P0/IMPORTANT (which would game the priority
+    // queue, and — once tiers become money multipliers — the payout).
+    const tier = isAdmin(ctx) ? normalizeTier(args.tier) : 'STANDARD';
+
     // Create in Atlas
     const atlasResult = await createItem(ctx, {
       title,
       columnId,
       assignee: args.assignee || undefined,
-      deadline: args.deadline || undefined,
+      deadline: deadline || undefined,
       subtasks,
       requester,
       requesterChatId: ctx.chatId,
+      priorityTier: tier,
+      // Idempotency key: a retried/replayed POST with this externalId returns
+      // the existing Atlas row instead of creating a duplicate (the duplicate
+      // class the 2026-06 incidents kept hitting). externalId == local id.
+      externalId: taskId,
     });
 
     // Save locally
     db.prepare(
-      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, synced_at, requester, requester_chat_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, synced_at, requester, requester_chat_id, priority_tier, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
     ).run(
       taskId,
       atlasResult?.atlasId || null,
@@ -67,11 +102,12 @@ const createTask = {
       columnName || null,
       columnId || null,
       args.assignee || null,
-      args.deadline || null,
+      deadline || null,
       args.done ? 'DONE' : 'OPEN',
       atlasResult ? new Date().toISOString() : null,
       requester,
       ctx.chatId,
+      tier,
     );
 
     // Mark done on Atlas if requested
@@ -149,7 +185,7 @@ const createTask = {
     let result = `Created: "${title}" (ID:${shortId})`;
     if (columnName) result += ` in ${columnName}`;
     if (args.assignee) result += `, assigned to ${args.assignee}`;
-    if (args.deadline) result += `, due ${args.deadline}`;
+    if (deadline) result += `, due ${deadline}`;
     if (!atlasResult) result += ' (saved locally, will sync later)';
     return result;
   },

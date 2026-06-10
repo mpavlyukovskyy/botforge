@@ -44,7 +44,8 @@ export function ensureDb(config) {
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         requester TEXT,
-        requester_chat_id TEXT
+        requester_chat_id TEXT,
+        priority_tier TEXT DEFAULT 'STANDARD'
       );
 
       CREATE TABLE IF NOT EXISTS task_subtasks (
@@ -108,7 +109,7 @@ function recordFailure() {
 
 // ─── Atlas HTTP ─────────────────────────────────────────────────────────────
 
-function getAtlasConfig(ctx) {
+export function getAtlasConfig(ctx) {
   const atlas = ctx.config.integrations?.atlas;
   return {
     url: (atlas?.url ?? process.env.ATLAS_SYNC_URL ?? 'https://mp-atlas.fly.dev').replace(/\/$/, ''),
@@ -204,10 +205,56 @@ export function findColumnByName(name, columns) {
 
 // ─── CRUD ───────────────────────────────────────────────────────────────────
 
+/**
+ * Read tasks from the local SQLite mirror, shaped like Atlas items. Used as a
+ * fallback when Atlas is unreachable so the brain's <board_state> never goes
+ * falsely empty — the failure that made it report live tasks as "removed" and
+ * recreate duplicates (2026-06-07). The returned array carries a non-enumerable
+ * `_stale` flag so callers (board_state) can warn the user the data may lag.
+ */
+function getLocalItems(ctx, opts = {}) {
+  let items = [];
+  try {
+    const db = ensureDb(ctx.config);
+    const where = [];
+    const params = [];
+    if (opts.status) { where.push('status = ?'); params.push(opts.status); }
+    if (opts.columnId) { where.push('column_id = ?'); params.push(opts.columnId); }
+    const sql = `SELECT id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, requester, priority_tier, blocked_at, blocked_on, blocked_seconds_total, parent_task_id, is_project, value_share, quality_mult
+                 FROM tasks ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at`;
+    items = db.prepare(sql).all(...params).map(r => ({
+      // Prefer the Atlas id so board IDs match the synced board; fall back to
+      // the local id for not-yet-synced tasks (still tool-resolvable via the
+      // 8-char prefix, which findTaskByIdPrefix matches against id OR spok_id).
+      id: r.spok_id || r.id,
+      title: r.title,
+      columnName: r.column_name || '',
+      columnId: r.column_id || null,
+      assignee: r.assignee || null,
+      deadline: r.deadline || null,
+      status: r.status,
+      earnedStatus: r.earned_status || null,
+      requester: r.requester || null,
+      priorityTier: r.priority_tier || 'STANDARD',
+      blockedAt: r.blocked_at || null,
+      blockedOn: r.blocked_on || null,
+      blockedSecondsTotal: r.blocked_seconds_total || 0,
+      parentTaskId: r.parent_task_id || null,
+      isProject: !!r.is_project,
+      valueShare: r.value_share || 1,
+      qualityMult: r.quality_mult != null ? Number(r.quality_mult) : 1.0,
+    }));
+  } catch (err) {
+    ctx.log.error(`[atlas] Local fallback read failed: ${err}`);
+  }
+  Object.defineProperty(items, '_stale', { value: true, enumerable: false });
+  return items;
+}
+
 export async function getItems(ctx, opts = {}) {
   if (isCircuitOpen()) {
-    ctx.log.error('[atlas] Circuit open, returning empty items');
-    return [];
+    ctx.log.warn('[atlas] Circuit open, serving items from local cache');
+    return getLocalItems(ctx, opts);
   }
 
   try {
@@ -229,9 +276,150 @@ export async function getItems(ctx, opts = {}) {
       columnName: item.column?.name || item.columnName || '',
     }));
   } catch (err) {
-    ctx.log.error(`[atlas] Failed to get items: ${err}`);
+    ctx.log.error(`[atlas] Failed to get items, serving from local cache: ${err}`);
     recordFailure();
-    return [];
+    return getLocalItems(ctx, opts);
+  }
+}
+
+/**
+ * Raw fetch of the set of live Atlas task ids (cuids), used by the
+ * financial/nudge crons to refuse to act on tasks Atlas no longer has
+ * (the "ghost" signature: a local row with a spok_id absent from Atlas).
+ *
+ * Unlike getItems() this NEVER falls back to the local cache — a presence
+ * check served from local would be meaningless. Returns a Set on success,
+ * or null when Atlas could not be verified (circuit open / fetch failed),
+ * so callers can choose to skip rather than act on unverifiable state.
+ */
+export async function fetchAtlasLiveIds(ctx) {
+  if (isCircuitOpen()) return null;
+  try {
+    const { endpoint } = getAtlasConfig(ctx);
+    const resp = await atlasFetch(ctx, `${endpoint}?status=OPEN`);
+    if (!resp.ok) throw new Error(`live-ids fetch failed: ${resp.status}`);
+    const data = await resp.json();
+    recordSuccess();
+    return new Set((data.items || []).map(i => i.id));
+  } catch (err) {
+    ctx.log?.warn?.(`[atlas] fetchAtlasLiveIds failed: ${err}`);
+    recordFailure();
+    return null;
+  }
+}
+
+/**
+ * Full-truth reconcile snapshot: every Atlas task (all statuses, all billing
+ * months, INCLUDING soft-deleted tombstones). Used by reconcile() to make the
+ * local cache exactly equal Atlas. Raw — never falls back to local cache.
+ * Returns the items array on success, or null when Atlas is unverifiable
+ * (circuit open / fetch failed) so reconcile can safe-abort instead of reaping.
+ */
+export async function fetchAtlasSnapshot(ctx) {
+  if (isCircuitOpen()) return null;
+  try {
+    const { endpoint } = getAtlasConfig(ctx);
+    const resp = await atlasFetch(ctx, `${endpoint}?all=1&includeDeleted=1`, {}, 20_000);
+    if (!resp.ok) throw new Error(`snapshot fetch failed: ${resp.status}`);
+    const data = await resp.json();
+    recordSuccess();
+    return (data.items || []).map(i => ({ ...i, columnName: i.column?.name || i.columnName || '' }));
+  } catch (err) {
+    ctx.log?.warn?.(`[atlas] fetchAtlasSnapshot failed: ${err}`);
+    recordFailure();
+    return null;
+  }
+}
+
+/**
+ * Reconcile deductions Atlas->local: pull ALL deductions (incl. reversed) and
+ * converge the local `deductions` table's reversed_at / contested_at so a
+ * reversal or contest done on the dashboard reaches the bot's balance.
+ * Deductions remain bot-created (bot->Atlas on create); this adds the missing
+ * return path for state changes. Returns count of local rows updated, or null
+ * if Atlas unverifiable.
+ */
+/** PATCH a deduction on Atlas (action: 'contest' | 'reverse'). Best-effort. */
+export async function patchDeduction(ctx, id, body) {
+  if (isCircuitOpen()) return false;
+  try {
+    const { url, token } = getAtlasConfig(ctx);
+    const resp = await fetch(`${url}/api/sync/kristina-bot/deductions`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id, ...body }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) throw new Error(`patchDeduction failed: ${resp.status}`);
+    recordSuccess();
+    return true;
+  } catch (err) { ctx.log?.warn?.(`[atlas] patchDeduction: ${err}`); recordFailure(); return false; }
+}
+
+/** POST a recognition to Atlas. Best-effort. */
+export async function postRecognition(ctx, body) {
+  if (isCircuitOpen()) return false;
+  try {
+    const { url, token } = getAtlasConfig(ctx);
+    const resp = await fetch(`${url}/api/sync/kristina-bot/recognition`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) throw new Error(`postRecognition failed: ${resp.status}`);
+    recordSuccess();
+    return true;
+  } catch (err) { ctx.log?.warn?.(`[atlas] postRecognition: ${err}`); recordFailure(); return false; }
+}
+
+/** Resolve a deduction by 8-char id prefix (for contest/reverse by handle). */
+export function findDeductionByIdPrefix(ctx, idPrefix) {
+  const db = ensureDb(ctx.config);
+  return db.prepare(
+    'SELECT id, amount, reason, requester_chat_id, reversed_at, contested_at FROM deductions WHERE id LIKE ?'
+  ).get(`${idPrefix}%`);
+}
+
+export async function reconcileDeductions(ctx) {
+  if (isCircuitOpen()) return null;
+  try {
+    const { url, token } = getAtlasConfig(ctx);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    let resp;
+    try {
+      resp = await fetch(`${url}/api/sync/kristina-bot/deductions?all=1`, {
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } finally { clearTimeout(timeout); }
+    if (!resp.ok) throw new Error(`deductions fetch failed: ${resp.status}`);
+    const data = await resp.json();
+    recordSuccess();
+    const db = ensureDb(ctx.config);
+    const upd = db.prepare(
+      "UPDATE deductions SET reversed_at = ?, contested_at = COALESCE(?, contested_at), contest_note = COALESCE(?, contest_note) WHERE id = ?"
+    );
+    let changed = 0;
+    const tx = db.transaction((rows) => {
+      for (const d of rows) {
+        const r = db.prepare("SELECT reversed_at, contested_at FROM deductions WHERE id = ?").get(d.id);
+        if (!r) continue; // bot only tracks deductions it created
+        const wantRev = d.reversedAt || null;
+        const wantContest = d.contestedAt || null;
+        if ((r.reversed_at || null) !== wantRev || (r.contested_at || null) !== wantContest) {
+          upd.run(wantRev, wantContest, d.contestNote || null, d.id);
+          changed++;
+        }
+      }
+    });
+    tx(data.deductions || []);
+    return changed;
+  } catch (err) {
+    ctx.log?.warn?.(`[atlas] reconcileDeductions failed: ${err}`);
+    recordFailure();
+    return null;
   }
 }
 
@@ -393,7 +581,7 @@ export async function retrySyncPending(ctx) {
 
   // Phase 1: Unsynced tasks
   const pending = db
-    .prepare('SELECT id, title, column_id, assignee, deadline, status, requester, requester_chat_id FROM tasks WHERE synced_at IS NULL')
+    .prepare('SELECT id, title, column_id, assignee, deadline, status, requester, requester_chat_id, priority_tier FROM tasks WHERE synced_at IS NULL')
     .all();
 
   for (const task of pending) {
@@ -426,6 +614,11 @@ export async function retrySyncPending(ctx) {
       subtasks: subtasks.length > 0 ? subtasks : undefined,
       requester: task.requester || undefined,
       requesterChatId: task.requester_chat_id || undefined,
+      priorityTier: task.priority_tier || 'STANDARD',
+      // Idempotency: if this task already reached Atlas on a prior attempt
+      // whose response was lost, the upsert-on-externalId returns that row
+      // instead of duplicating. externalId == local id.
+      externalId: task.id,
     });
 
     if (result) {

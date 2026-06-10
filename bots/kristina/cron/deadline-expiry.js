@@ -11,11 +11,28 @@
  */
 import { ensureDb, updateItem } from '../lib/atlas-client.js';
 import { computeDecayValue } from '../lib/decay.js';
+import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
+import { reconcile } from '../lib/sync.js';
 
 export default {
   name: 'deadline_expiry',
   async execute(ctx) {
     const db = ensureDb(ctx.config);
+
+    // Phase 0: reconcile to Atlas truth first; only an explicit abort skips
+    // the run (skipped/disabled falls through to the presence backstop). RT-D3.
+    const rep = await reconcile(ctx);
+    if (rep?.aborted) {
+      ctx.log.warn(`deadline_expiry: reconcile aborted (${rep.aborted}), skipping run`);
+      return;
+    }
+
+    // Bleed-stopper backstop: don't flag/notify ghosts; don't act when unverifiable.
+    const presence = await loadAtlasPresence(ctx);
+    if (shouldSkipRun(presence)) {
+      ctx.log.warn('deadline_expiry: Atlas unverifiable, skipping run');
+      return;
+    }
 
     // Find OPEN tasks past deadline not yet flagged
     const expired = db.prepare(
@@ -26,6 +43,7 @@ export default {
           AND datetime(deadline) < datetime('now')
           AND (earned_status IS NULL OR earned_status NOT IN ('OVERDUE','CANCELLED','EARNED','PENALTY'))
           AND handed_off_at IS NULL
+          AND blocked_at IS NULL
           AND overdue_notified_at IS NULL`
     ).all();
 
@@ -33,6 +51,7 @@ export default {
     ctx.log.info(`deadline_expiry: ${expired.length} tasks newly overdue`);
 
     for (const task of expired) {
+      if (presence.skip(task)) continue;
       const { value } = computeDecayValue(task.deadline);
       db.prepare(
         `UPDATE tasks

@@ -40,7 +40,7 @@ function makeConfig(overrides: Partial<BotConfig['schedule']> = {}): BotConfig {
       digest_job: { cron: '0 9 * * *', timezone: 'UTC', replay_on_crash: false } as any,
       ...overrides,
     },
-  } as BotConfig;
+  } as unknown as BotConfig;
 }
 
 function makeCtx(db: WrappedDb, config: BotConfig): SkillContext {

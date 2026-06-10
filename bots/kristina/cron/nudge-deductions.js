@@ -13,6 +13,8 @@ import { DateTime } from 'luxon';
 import { ensureDb, syncDeduction } from '../lib/atlas-client.js';
 import { isWorkingDay, TIMEZONE } from '../lib/working-hours.js';
 import { getCurrentBillingMonth } from '../lib/db.js';
+import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
+import { reconcile } from '../lib/sync.js';
 
 const DAILY_DEDUCTION_CAP = 5; // 50 nudges = $5.00 max per chat
 const DEDUCTION_CENTS = 10;
@@ -29,6 +31,23 @@ export default {
 
     const db = ensureDb(ctx.config);
 
+    // Phase 0: money cron — reconcile to Atlas truth FIRST so we never charge
+    // against a stale cache. Only an explicit abort skips; skipped/disabled
+    // falls through to the presence backstop below. RT-D3.
+    const rep = await reconcile(ctx);
+    if (rep?.aborted) {
+      ctx.log.warn(`nudge_deductions: reconcile aborted (${rep.aborted}), skipping run`);
+      return;
+    }
+
+    // Bleed-stopper backstop: never charge money for a task Atlas no longer has,
+    // and never charge when Atlas can't be verified. See lib/presence.js.
+    const presence = await loadAtlasPresence(ctx);
+    if (shouldSkipRun(presence)) {
+      ctx.log.warn('nudge_deductions: Atlas unverifiable, skipping run');
+      return;
+    }
+
     // Pre-aggregate per-chat deduction counts already applied today
     const chatCounts = db.prepare(
       `SELECT t.requester_chat_id AS chatId, COUNT(*) AS cnt
@@ -40,6 +59,7 @@ export default {
     ).all(today);
     const chatDeductions = new Map(chatCounts.map(r => [r.chatId, r.cnt]));
     const capNotified = new Set();
+    const chatCharges = new Map(); // chatId -> [{id,title,amount}] for one summary DM
 
     const pending = db.prepare(
       `SELECT nl.id, nl.task_id, nl.nudge_date
@@ -53,9 +73,22 @@ export default {
     let applied = 0;
     for (const row of pending) {
       const task = db.prepare(
-        `SELECT id, spok_id, title, status, column_name, requester_chat_id
+        `SELECT id, spok_id, title, status, column_name, requester_chat_id, blocked_at
            FROM tasks WHERE id = ?`
       ).get(row.task_id);
+
+      // Ghost (deleted in Atlas) → close the nudge, never charge.
+      if (task && presence.skip(task)) {
+        db.prepare("UPDATE nudge_log SET responded_at = ? WHERE id = ?")
+          .run(new Date().toISOString(), row.id);
+        continue;
+      }
+
+      // Blocked/waiting on someone → not the assistant's fault, never charge.
+      if (task && task.blocked_at) {
+        db.prepare("UPDATE nudge_log SET responded_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
+        continue;
+      }
 
       // Task moved out of In Progress / completed → close the nudge
       if (!task || task.status === 'DONE' || task.status === 'ARCHIVED' || task.column_name !== 'In Progress') {
@@ -100,16 +133,26 @@ export default {
       ).run(DEDUCTION_CENTS, row.id);
       chatDeductions.set(chatId, (chatDeductions.get(chatId) || 0) + 1);
 
+      // Accumulate for ONE summary DM per chat (no 50-DM spam), each line
+      // carrying a (D:id) contest handle. Procedural justice: every charge is
+      // transparent + contestable.
+      if (!chatCharges.has(chatId)) chatCharges.set(chatId, []);
+      chatCharges.get(chatId).push({ id: deductionId, title: task.title, amount });
+      applied++;
+    }
+
+    // One summary DM per chat with contest handles.
+    for (const [chatId, charges] of chatCharges.entries()) {
+      const total = charges.reduce((s, c) => s + c.amount, 0).toFixed(2);
+      const lines = charges.map(c => `• $${c.amount.toFixed(2)} — ${c.title} (D:${c.id.slice(0, 8)})`).join('\n');
       try {
         await ctx.adapter.send({
           chatId,
-          text: `$0.10 deducted for no update on *${task.title}*.`,
-          parseMode: 'Markdown',
+          text: `Logged $${total} in deductions today for no update on:\n${lines}\n\nIf any was unfair, reply "contest D:<id>" and I'll flag it for Mark.`,
         });
       } catch (err) {
-        ctx.log.warn(`nudge_deductions: notice send failed for ${task.id}: ${err}`);
+        ctx.log.warn(`nudge_deductions: summary DM failed for ${chatId}: ${err}`);
       }
-      applied++;
     }
 
     if (applied > 0) ctx.log.info(`nudge_deductions: applied ${applied} deductions for ${today}`);

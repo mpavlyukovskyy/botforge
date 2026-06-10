@@ -36,7 +36,7 @@ describe('withTimeout', () => {
     let observedAbort = false;
     try {
       await withTimeout(
-        (signal) => new Promise((resolve, reject) => {
+        (signal) => new Promise((_resolve, reject) => {
           signal.addEventListener('abort', () => {
             observedAbort = true;
             reject(signal.reason);

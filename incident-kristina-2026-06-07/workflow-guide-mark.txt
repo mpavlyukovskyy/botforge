@@ -1,0 +1,18 @@
+Mark — your operator guide for the new prioritization lever (live now).
+
+WHAT'S LIVE:
+- Every task has a priority tier: P0 (drop-everything) / IMPORTANT / STANDARD (default) / ROUTINE. You set it in plain language — "make this P0", "this is important", "low priority / whenever" — on a new task or an existing one ("bump the hotel task to P0").
+- The board now shows a WSJF-ranked "Today's Top 3" (priority × deadline urgency) + tags on high-priority items. That's Kristina's focus list.
+- Only you can set a priority above STANDARD. If Kristina (or Sara/Hendrik) tries, it's silently clamped to STANDARD — so the queue can't be gamed.
+
+IMPORTANT — tier is a SEQUENCING signal only right now. It changes the ORDER work surfaces in, NOT anyone's pay. The compensation model is unchanged (still the flat $1/task + the old deadline-decay + the $0.10 no-response deductions + monthly balance). Don't tell Kristina anything about pay changing — none has.
+
+HOW TO USE IT WELL:
+- Keep P0 rare. Its whole value is scarcity — if everything is P0, the Top 3 becomes noise and the lever stops working. Treat yourself to ~1-2 P0s and a handful of IMPORTANTs a week; everything else is STANDARD/ROUTINE.
+- Importance vs urgency are different: tier = how much it matters; deadline = when it's needed. A high-tier task with a loose deadline still rises in the Top 3 so the important-but-not-urgent work doesn't get starved by little fires.
+- To re-sequence her day, just bump a tier — she'll see it move to the top.
+
+WHAT'S NOT LIVE YET (sequenced, deliberately):
+The full incentive redesign — tier-weighted pay, removing the negative-debt penalty (floor at $0), the endowed monthly pool/clawback, quality bonuses (reopen/excellent), the WIP "finish-before-you-start" limit, a blocked/waiting state, and the dashboard scoreboard/lanes — is NOT shipped. It's intentionally gated behind a trust+safety layer (contestable deductions, reconcile-in-crons, a $0 floor on the pool) so we never slam a half-built money model onto live compensation. When it's ready it'll ship as one announced cutover, and only then would Kristina's guide mention pay.
+
+Bottom line: you now have the prioritization lever you were missing, with zero risk to her pay or morale. Set tiers freely; the rest is coming on a careful, sequenced rollout.

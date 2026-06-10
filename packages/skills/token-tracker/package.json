@@ -14,6 +14,8 @@
     "@botforge/storage-sqlite": "workspace:*"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
     "tsup": "^8.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.7.0",

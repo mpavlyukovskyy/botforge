@@ -6,6 +6,8 @@
  */
 import { DateTime } from 'luxon';
 import { ensureDb } from './atlas-client.js';
+import { getFlag } from './flags.js';
+import { TIER_WEIGHT } from './tier.js';
 import { computeDecayValue } from './decay.js';
 import { TIMEZONE } from './working-hours.js';
 
@@ -24,6 +26,23 @@ export function runMigrations(ctx) {
   try { db.exec("ALTER TABLE tasks ADD COLUMN done_synced INTEGER DEFAULT 0"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'telegram'"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN telegram_msg_id TEXT"); } catch {}
+  // Phase A: priority tier (Mark's prioritization lever). Sequencing signal only.
+  try { db.exec("ALTER TABLE tasks ADD COLUMN priority_tier TEXT DEFAULT 'STANDARD'"); } catch {}
+  // S2/S3: deduction contest state (reversal/contest reconciled back from Atlas).
+  try { db.exec("ALTER TABLE deductions ADD COLUMN contested_at TEXT"); } catch {}
+  try { db.exec("ALTER TABLE deductions ADD COLUMN contest_note TEXT"); } catch {}
+  // S5: has_earned — set on first completion; gates re-pay on reopen->redo.
+  try { db.exec("ALTER TABLE tasks ADD COLUMN has_earned INTEGER DEFAULT 0"); } catch {}
+  // S6: blocked/waiting state (excluded from nudges/decay while set).
+  try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_at TEXT"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_on TEXT"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN blocked_seconds_total INTEGER DEFAULT 0"); } catch {}
+  // S8: milestones — child value partitions the parent's tiered value.
+  try { db.exec("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN is_project INTEGER DEFAULT 0"); } catch {}
+  try { db.exec("ALTER TABLE tasks ADD COLUMN value_share INTEGER DEFAULT 1"); } catch {}
+  // S9: Mark's quality lever (set from the dashboard). 1.0 = neutral (== today).
+  try { db.exec("ALTER TABLE tasks ADD COLUMN quality_mult REAL DEFAULT 1.0"); } catch {}
 
   // callback_tracking table
   db.exec(`
@@ -160,7 +179,7 @@ export function isAdmin(ctx) {
 export function findTaskByIdPrefix(ctx, idPrefix) {
   const db = ensureDb(ctx.config);
   return db.prepare(
-    'SELECT id, spok_id, title, column_name, deadline, status, earned_status, current_value, handed_off_at, handed_off_note FROM tasks WHERE id LIKE ? OR spok_id LIKE ?'
+    'SELECT id, spok_id, title, column_name, deadline, status, earned_status, current_value, handed_off_at, handed_off_note, requester_chat_id, blocked_at FROM tasks WHERE id LIKE ? OR spok_id LIKE ?'
   ).get(`${idPrefix}%`, `${idPrefix}%`);
 }
 
@@ -176,9 +195,11 @@ export function markTaskDoneLocally(ctx, taskId) {
   const db = ensureDb(ctx.config);
 
   const current = db.prepare(
-    "SELECT status, current_value FROM tasks WHERE id = ?"
+    "SELECT status, current_value, has_earned FROM tasks WHERE id = ?"
   ).get(taskId);
-  if (current?.status === 'DONE') {
+  // Idempotent / no-double-pay: if already DONE, or it already earned once
+  // (reopen->redo must not re-credit, INCENTIVE_V2), return the frozen value.
+  if (current?.status === 'DONE' || current?.has_earned) {
     const val = current.current_value ?? 1.0;
     return {
       earnedValue: val,
@@ -187,8 +208,14 @@ export function markTaskDoneLocally(ctx, taskId) {
   }
 
   const row = db.prepare(
-    'SELECT deadline, created_at, handed_off_at FROM tasks WHERE id = ?'
+    'SELECT deadline, created_at, handed_off_at, priority_tier, blocked_seconds_total, parent_task_id, is_project, value_share, quality_mult FROM tasks WHERE id = ?'
   ).get(taskId);
+
+  // S8: a project container itself earns nothing — its milestones carry the value.
+  if (getFlag('INCENTIVE_V2') && row?.is_project) {
+    db.prepare("UPDATE tasks SET status='DONE', earned_status='EARNED', current_value=0, has_earned=1, done_synced=0, updated_at=datetime('now') WHERE id=?").run(taskId);
+    return { earnedValue: 0, financialNote: 'project complete (value earned via its milestones)' };
+  }
 
   let earnedValue = 1.0;
   let financialNote = '+$1.00';
@@ -200,7 +227,7 @@ export function markTaskDoneLocally(ctx, taskId) {
       earnedValue = 1.0;
       financialNote = '+$1.00 (handed off on time)';
     } else {
-      const { value, daysOverdue: dOver } = computeDecayValue(row.deadline);
+      const { value, daysOverdue: dOver } = computeDecayValue(row.deadline, undefined, row.blocked_seconds_total || 0);
       earnedValue = value;
       daysOverdue = dOver;
       if (value >= 1.0) {
@@ -215,11 +242,44 @@ export function markTaskDoneLocally(ctx, taskId) {
     }
   }
 
+  // v2 money model (INCENTIVE_V2). OFF (default) == today (plain decay value).
+  if (getFlag('INCENTIVE_V2')) {
+    // `earnedValue` here is the decay FRACTION (0..1) for this task's own
+    // timeliness. The base it scales depends on whether this is a milestone.
+    const decayFraction = earnedValue; // 1.0 on-time, <1 late, 0 floored
+    if (row?.parent_task_id) {
+      // S8: milestone earns a PARTITION of the parent's tiered value — never a
+      // multiple. base = parentTierWeight × (this.share / Σ sibling shares).
+      const parent = db.prepare(
+        'SELECT priority_tier FROM tasks WHERE id = ? OR spok_id = ?'
+      ).get(row.parent_task_id, row.parent_task_id);
+      const shareSum = db.prepare(
+        'SELECT COALESCE(SUM(value_share),0) AS s FROM tasks WHERE parent_task_id = ?'
+      ).get(row.parent_task_id).s || 1;
+      const parentMult = TIER_WEIGHT[parent?.priority_tier || 'STANDARD'] ?? 1;
+      const base = parentMult * ((row.value_share || 1) / shareSum);
+      earnedValue = Math.round(base * decayFraction * 100) / 100;
+      financialNote = `+$${earnedValue.toFixed(2)} (milestone)`;
+    } else {
+      const mult = TIER_WEIGHT[row?.priority_tier || 'STANDARD'] ?? 1;
+      earnedValue = Math.round(decayFraction * mult * 100) / 100;
+      financialNote = `+$${earnedValue.toFixed(2)} (${row?.priority_tier || 'STANDARD'})`;
+    }
+    // S9 quality multiplier (Mark's lever, set from the dashboard). Default 1.0
+    // == no change. "excellent" = 1.15 bonus; a reopened task is reset to 1.0.
+    const qMult = row?.quality_mult != null ? Number(row.quality_mult) : 1.0;
+    if (qMult !== 1.0) {
+      earnedValue = Math.round(earnedValue * qMult * 100) / 100;
+      financialNote = `+$${earnedValue.toFixed(2)} (${qMult > 1 ? 'excellent' : 'quality'} ×${qMult})`;
+    }
+  }
+
   db.prepare(
     `UPDATE tasks
        SET status = 'DONE',
            earned_status = 'EARNED',
            current_value = ?,
+           has_earned = 1,
            handed_off_at = NULL,
            handed_off_note = NULL,
            overdue_notified_at = NULL,
@@ -286,12 +346,16 @@ export function computeBalance(ctx, period = 'this_month') {
 
   const earnedTotal = decayEarned.total + legacyEarned.count * 1.0 + legacyLate.count * 0.5;
   const taskCount = decayEarned.count + legacyEarned.count + legacyLate.count;
-  const overdueDebt = overdue.total; // already negative
+  // v2 (INCENTIVE_V2): no negative debt — an overdue task is in-play (forfeits
+  // upside) but never subtracts from the balance. OFF == today (debt subtracts).
+  const v2 = getFlag('INCENTIVE_V2');
+  const overdueDebt = v2 ? 0 : overdue.total; // legacy: already negative
   const net = earnedTotal - deductions.total + overdueDebt;
 
   const lines = [`Completed: ${taskCount} tasks ($${earnedTotal.toFixed(2)})`];
   if (forfeited.count > 0) lines.push(`Expired: ${forfeited.count} tasks ($0.00)`);
-  if (overdue.count > 0) lines.push(`Overdue: ${overdue.count} tasks (-$${Math.abs(overdueDebt).toFixed(2)})`);
+  if (overdue.count > 0 && !v2) lines.push(`Overdue: ${overdue.count} tasks (-$${Math.abs(overdueDebt).toFixed(2)})`);
+  else if (overdue.count > 0) lines.push(`Overdue: ${overdue.count} tasks (in play, no debt)`);
   lines.push(`Deductions: -$${deductions.total.toFixed(2)}`);
   lines.push(`Open: ${open.count} tasks (in play)`);
   lines.push('---');

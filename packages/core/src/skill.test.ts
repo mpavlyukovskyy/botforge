@@ -42,7 +42,7 @@ function runLogScenario(scenarioName: 'json' | 'level' | 'redact' | 'structured'
       log.info('event', { order_id: 42, latency_ms: 123 });
     `,
   };
-  writeFileSync(scriptPath, scripts[scenarioName], 'utf-8');
+  writeFileSync(scriptPath, scripts[scenarioName]!, 'utf-8');
   const out = execSync(`node --import tsx ${scriptPath}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
   rmSync(tmp, { recursive: true, force: true });
   return out.split('\n').filter(Boolean).map((l) => {
@@ -68,7 +68,7 @@ describe('mintTelegramRequestId', () => {
 describe('createLogger — JSON output (via subprocess capture)', () => {
   it('emits JSON lines with bot name and ISO timestamp', () => {
     const lines = runLogScenario('json');
-    const last = lines[lines.length - 1];
+    const last = lines[lines.length - 1]!;
     assert.equal(last.bot, 'TestBot');
     assert.equal(last.msg, 'hello world');
     assert.equal(last.level, 'info');

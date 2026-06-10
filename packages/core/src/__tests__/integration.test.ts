@@ -76,7 +76,7 @@ describe('integration: basic message handling', () => {
     instance = await bootBot(BASIC_CONFIG);
     await mock.inject({ text: 'hello bot', chatId: 'chat-1' });
     assert.equal(processedCount, 1);
-    assert.equal(processedMessages[0].text, 'hello bot');
+    assert.equal(processedMessages[0]!.text, 'hello bot');
   });
 
   it('group passive mode + @mention → processed', async () => {

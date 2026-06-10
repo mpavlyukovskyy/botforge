@@ -139,7 +139,7 @@ export function onPollingError(state: ResilienceState, err: unknown): Resilience
   }
 
   const level = state.backoffLevel;
-  const ms = state.schedule[Math.min(level, state.schedule.length - 1)];
+  const ms = state.schedule[Math.min(level, state.schedule.length - 1)] ?? DEFAULT_BACKOFF_SCHEDULE_MS[DEFAULT_BACKOFF_SCHEDULE_MS.length - 1]!;
   state.backoffLevel = level + 1;
   return { action: 'backoff', ms, level: level + 1 };
 }

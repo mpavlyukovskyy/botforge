@@ -84,7 +84,7 @@ describe('enqueue + drain — happy path', () => {
 
     await outbox.drain();
     assert.equal(sendCalls.length, 1);
-    assert.equal(sendCalls[0].text, 'hello');
+    assert.equal(sendCalls[0]!.text, 'hello');
     assert.equal(outbox.pendingCount(), 0);
     assert.equal(outbox.stats().sent, 1);
   });
