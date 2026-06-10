@@ -13,7 +13,11 @@ let snapshotResult; // what fetchAtlasSnapshot returns this test
 vi.mock('./atlas-client.js', () => ({
   ensureDb: () => db,
   fetchAtlasSnapshot: async () => snapshotResult,
+  reconcileDeductions: async () => 0,
+  getAtlasConfig: () => ({ url: 'http://x', token: 't' }),
 }));
+// flags refresh is best-effort + network; stub it out so reconcile tests stay pure.
+vi.mock('./flags.js', () => ({ refreshFlags: async () => {}, getFlag: () => false, setFlagsCache: () => {} }));
 
 const { reconcile } = await import('./sync.js');
 

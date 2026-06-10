@@ -109,7 +109,7 @@ function recordFailure() {
 
 // ─── Atlas HTTP ─────────────────────────────────────────────────────────────
 
-function getAtlasConfig(ctx) {
+export function getAtlasConfig(ctx) {
   const atlas = ctx.config.integrations?.atlas;
   return {
     url: (atlas?.url ?? process.env.ATLAS_SYNC_URL ?? 'https://mp-atlas.fly.dev').replace(/\/$/, ''),

@@ -6,6 +6,7 @@
  */
 import { DateTime } from 'luxon';
 import { ensureDb } from './atlas-client.js';
+import { getFlag } from './flags.js';
 import { computeDecayValue } from './decay.js';
 import { TIMEZONE } from './working-hours.js';
 
@@ -291,12 +292,16 @@ export function computeBalance(ctx, period = 'this_month') {
 
   const earnedTotal = decayEarned.total + legacyEarned.count * 1.0 + legacyLate.count * 0.5;
   const taskCount = decayEarned.count + legacyEarned.count + legacyLate.count;
-  const overdueDebt = overdue.total; // already negative
+  // v2 (INCENTIVE_V2): no negative debt — an overdue task is in-play (forfeits
+  // upside) but never subtracts from the balance. OFF == today (debt subtracts).
+  const v2 = getFlag('INCENTIVE_V2');
+  const overdueDebt = v2 ? 0 : overdue.total; // legacy: already negative
   const net = earnedTotal - deductions.total + overdueDebt;
 
   const lines = [`Completed: ${taskCount} tasks ($${earnedTotal.toFixed(2)})`];
   if (forfeited.count > 0) lines.push(`Expired: ${forfeited.count} tasks ($0.00)`);
-  if (overdue.count > 0) lines.push(`Overdue: ${overdue.count} tasks (-$${Math.abs(overdueDebt).toFixed(2)})`);
+  if (overdue.count > 0 && !v2) lines.push(`Overdue: ${overdue.count} tasks (-$${Math.abs(overdueDebt).toFixed(2)})`);
+  else if (overdue.count > 0) lines.push(`Overdue: ${overdue.count} tasks (in play, no debt)`);
   lines.push(`Deductions: -$${deductions.total.toFixed(2)}`);
   lines.push(`Open: ${open.count} tasks (in play)`);
   lines.push('---');

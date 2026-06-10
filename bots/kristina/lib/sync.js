@@ -23,7 +23,8 @@
  * NOT touch the cache (never reap on a bad snapshot) and returns a report the
  * caller can alert on.
  */
-import { ensureDb, fetchAtlasSnapshot, reconcileDeductions } from './atlas-client.js';
+import { ensureDb, fetchAtlasSnapshot, reconcileDeductions, getAtlasConfig } from './atlas-client.js';
+import { refreshFlags } from './flags.js';
 
 export const RECONCILE_ENABLED = process.env.KRISTINA_RECONCILE !== '0';
 
@@ -34,6 +35,8 @@ export async function reconcile(ctx) {
   if (_running) return { skipped: 'already-running' };
   _running = true;
   try {
+    // Refresh feature flags from Atlas (single source of truth) every cycle.
+    await refreshFlags(ctx, getAtlasConfig);
     const db = ensureDb(ctx.config);
     const localCount = db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n;
 
