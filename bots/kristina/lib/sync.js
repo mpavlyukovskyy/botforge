@@ -23,7 +23,7 @@
  * NOT touch the cache (never reap on a bad snapshot) and returns a report the
  * caller can alert on.
  */
-import { ensureDb, fetchAtlasSnapshot } from './atlas-client.js';
+import { ensureDb, fetchAtlasSnapshot, reconcileDeductions } from './atlas-client.js';
 
 export const RECONCILE_ENABLED = process.env.KRISTINA_RECONCILE !== '0';
 
@@ -94,8 +94,13 @@ export async function reconcile(ctx) {
     });
     apply();
 
-    const report = { ok: true, snapshot: snapshot.length, live: live.length, upserted, inserted, reaped, localBefore: localCount };
-    if (reaped > 0 || inserted > 0) ctx.log?.info?.(`[reconcile] ${JSON.stringify(report)}`);
+    // Converge deduction reversal/contest state from Atlas (two-way for
+    // deductions: bot creates them, dashboard can reverse/contest them).
+    let deductionsChanged = null;
+    try { deductionsChanged = await reconcileDeductions(ctx); } catch { /* non-fatal */ }
+
+    const report = { ok: true, snapshot: snapshot.length, live: live.length, upserted, inserted, reaped, localBefore: localCount, deductionsChanged };
+    if (reaped > 0 || inserted > 0 || deductionsChanged) ctx.log?.info?.(`[reconcile] ${JSON.stringify(report)}`);
     return report;
   } finally {
     _running = false;

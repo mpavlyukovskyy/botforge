@@ -59,6 +59,7 @@ export default {
     ).all(today);
     const chatDeductions = new Map(chatCounts.map(r => [r.chatId, r.cnt]));
     const capNotified = new Set();
+    const chatCharges = new Map(); // chatId -> [{id,title,amount}] for one summary DM
 
     const pending = db.prepare(
       `SELECT nl.id, nl.task_id, nl.nudge_date
@@ -126,16 +127,26 @@ export default {
       ).run(DEDUCTION_CENTS, row.id);
       chatDeductions.set(chatId, (chatDeductions.get(chatId) || 0) + 1);
 
+      // Accumulate for ONE summary DM per chat (no 50-DM spam), each line
+      // carrying a (D:id) contest handle. Procedural justice: every charge is
+      // transparent + contestable.
+      if (!chatCharges.has(chatId)) chatCharges.set(chatId, []);
+      chatCharges.get(chatId).push({ id: deductionId, title: task.title, amount });
+      applied++;
+    }
+
+    // One summary DM per chat with contest handles.
+    for (const [chatId, charges] of chatCharges.entries()) {
+      const total = charges.reduce((s, c) => s + c.amount, 0).toFixed(2);
+      const lines = charges.map(c => `• $${c.amount.toFixed(2)} — ${c.title} (D:${c.id.slice(0, 8)})`).join('\n');
       try {
         await ctx.adapter.send({
           chatId,
-          text: `$0.10 deducted for no update on *${task.title}*.`,
-          parseMode: 'Markdown',
+          text: `Logged $${total} in deductions today for no update on:\n${lines}\n\nIf any was unfair, reply "contest D:<id>" and I'll flag it for Mark.`,
         });
       } catch (err) {
-        ctx.log.warn(`nudge_deductions: notice send failed for ${task.id}: ${err}`);
+        ctx.log.warn(`nudge_deductions: summary DM failed for ${chatId}: ${err}`);
       }
-      applied++;
     }
 
     if (applied > 0) ctx.log.info(`nudge_deductions: applied ${applied} deductions for ${today}`);

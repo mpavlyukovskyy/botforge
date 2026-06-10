@@ -26,6 +26,9 @@ export function runMigrations(ctx) {
   try { db.exec("ALTER TABLE tasks ADD COLUMN telegram_msg_id TEXT"); } catch {}
   // Phase A: priority tier (Mark's prioritization lever). Sequencing signal only.
   try { db.exec("ALTER TABLE tasks ADD COLUMN priority_tier TEXT DEFAULT 'STANDARD'"); } catch {}
+  // S2/S3: deduction contest state (reversal/contest reconciled back from Atlas).
+  try { db.exec("ALTER TABLE deductions ADD COLUMN contested_at TEXT"); } catch {}
+  try { db.exec("ALTER TABLE deductions ADD COLUMN contest_note TEXT"); } catch {}
 
   // callback_tracking table
   db.exec(`

@@ -324,6 +324,98 @@ export async function fetchAtlasSnapshot(ctx) {
   }
 }
 
+/**
+ * Reconcile deductions Atlas->local: pull ALL deductions (incl. reversed) and
+ * converge the local `deductions` table's reversed_at / contested_at so a
+ * reversal or contest done on the dashboard reaches the bot's balance.
+ * Deductions remain bot-created (bot->Atlas on create); this adds the missing
+ * return path for state changes. Returns count of local rows updated, or null
+ * if Atlas unverifiable.
+ */
+/** PATCH a deduction on Atlas (action: 'contest' | 'reverse'). Best-effort. */
+export async function patchDeduction(ctx, id, body) {
+  if (isCircuitOpen()) return false;
+  try {
+    const { url, token } = getAtlasConfig(ctx);
+    const resp = await fetch(`${url}/api/sync/kristina-bot/deductions`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id, ...body }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) throw new Error(`patchDeduction failed: ${resp.status}`);
+    recordSuccess();
+    return true;
+  } catch (err) { ctx.log?.warn?.(`[atlas] patchDeduction: ${err}`); recordFailure(); return false; }
+}
+
+/** POST a recognition to Atlas. Best-effort. */
+export async function postRecognition(ctx, body) {
+  if (isCircuitOpen()) return false;
+  try {
+    const { url, token } = getAtlasConfig(ctx);
+    const resp = await fetch(`${url}/api/sync/kristina-bot/recognition`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) throw new Error(`postRecognition failed: ${resp.status}`);
+    recordSuccess();
+    return true;
+  } catch (err) { ctx.log?.warn?.(`[atlas] postRecognition: ${err}`); recordFailure(); return false; }
+}
+
+/** Resolve a deduction by 8-char id prefix (for contest/reverse by handle). */
+export function findDeductionByIdPrefix(ctx, idPrefix) {
+  const db = ensureDb(ctx.config);
+  return db.prepare(
+    'SELECT id, amount, reason, requester_chat_id, reversed_at, contested_at FROM deductions WHERE id LIKE ?'
+  ).get(`${idPrefix}%`);
+}
+
+export async function reconcileDeductions(ctx) {
+  if (isCircuitOpen()) return null;
+  try {
+    const { url, token } = getAtlasConfig(ctx);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    let resp;
+    try {
+      resp = await fetch(`${url}/api/sync/kristina-bot/deductions?all=1`, {
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } finally { clearTimeout(timeout); }
+    if (!resp.ok) throw new Error(`deductions fetch failed: ${resp.status}`);
+    const data = await resp.json();
+    recordSuccess();
+    const db = ensureDb(ctx.config);
+    const upd = db.prepare(
+      "UPDATE deductions SET reversed_at = ?, contested_at = COALESCE(?, contested_at), contest_note = COALESCE(?, contest_note) WHERE id = ?"
+    );
+    let changed = 0;
+    const tx = db.transaction((rows) => {
+      for (const d of rows) {
+        const r = db.prepare("SELECT reversed_at, contested_at FROM deductions WHERE id = ?").get(d.id);
+        if (!r) continue; // bot only tracks deductions it created
+        const wantRev = d.reversedAt || null;
+        const wantContest = d.contestedAt || null;
+        if ((r.reversed_at || null) !== wantRev || (r.contested_at || null) !== wantContest) {
+          upd.run(wantRev, wantContest, d.contestNote || null, d.id);
+          changed++;
+        }
+      }
+    });
+    tx(data.deductions || []);
+    return changed;
+  } catch (err) {
+    ctx.log?.warn?.(`[atlas] reconcileDeductions failed: ${err}`);
+    recordFailure();
+    return null;
+  }
+}
+
 export async function createItem(ctx, data) {
   if (isCircuitOpen()) {
     ctx.log.warn('[atlas] Circuit open, saving locally only');

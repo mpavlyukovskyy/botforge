@@ -22,6 +22,9 @@ brain:
     - cancel_task
     - hand_off
     - record_deduction
+    - contest_deduction
+    - reverse_deduction
+    - recognize
     - get_balance
     - attach_photo
   temperature: 0
