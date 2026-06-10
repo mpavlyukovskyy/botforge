@@ -7,6 +7,7 @@
 import { DateTime } from 'luxon';
 import { ensureDb } from './atlas-client.js';
 import { getFlag } from './flags.js';
+import { TIER_WEIGHT } from './tier.js';
 import { computeDecayValue } from './decay.js';
 import { TIMEZONE } from './working-hours.js';
 
@@ -30,6 +31,8 @@ export function runMigrations(ctx) {
   // S2/S3: deduction contest state (reversal/contest reconciled back from Atlas).
   try { db.exec("ALTER TABLE deductions ADD COLUMN contested_at TEXT"); } catch {}
   try { db.exec("ALTER TABLE deductions ADD COLUMN contest_note TEXT"); } catch {}
+  // S5: has_earned — set on first completion; gates re-pay on reopen->redo.
+  try { db.exec("ALTER TABLE tasks ADD COLUMN has_earned INTEGER DEFAULT 0"); } catch {}
 
   // callback_tracking table
   db.exec(`
@@ -182,9 +185,11 @@ export function markTaskDoneLocally(ctx, taskId) {
   const db = ensureDb(ctx.config);
 
   const current = db.prepare(
-    "SELECT status, current_value FROM tasks WHERE id = ?"
+    "SELECT status, current_value, has_earned FROM tasks WHERE id = ?"
   ).get(taskId);
-  if (current?.status === 'DONE') {
+  // Idempotent / no-double-pay: if already DONE, or it already earned once
+  // (reopen->redo must not re-credit, INCENTIVE_V2), return the frozen value.
+  if (current?.status === 'DONE' || current?.has_earned) {
     const val = current.current_value ?? 1.0;
     return {
       earnedValue: val,
@@ -193,7 +198,7 @@ export function markTaskDoneLocally(ctx, taskId) {
   }
 
   const row = db.prepare(
-    'SELECT deadline, created_at, handed_off_at FROM tasks WHERE id = ?'
+    'SELECT deadline, created_at, handed_off_at, priority_tier FROM tasks WHERE id = ?'
   ).get(taskId);
 
   let earnedValue = 1.0;
@@ -221,11 +226,21 @@ export function markTaskDoneLocally(ctx, taskId) {
     }
   }
 
+  // S5: v2 money model multiplies the (decay/handoff-aware) value by the
+  // priority tier (P0=8x ... ROUTINE=0.5x). OFF (default) == today (no tier
+  // weighting). Tier is Mark-set + clamped, so this can't be gamed by the doer.
+  if (getFlag('INCENTIVE_V2')) {
+    const mult = TIER_WEIGHT[row?.priority_tier || 'STANDARD'] ?? 1;
+    earnedValue = Math.round(earnedValue * mult * 100) / 100;
+    financialNote = `+$${earnedValue.toFixed(2)} (${row?.priority_tier || 'STANDARD'})`;
+  }
+
   db.prepare(
     `UPDATE tasks
        SET status = 'DONE',
            earned_status = 'EARNED',
            current_value = ?,
+           has_earned = 1,
            handed_off_at = NULL,
            handed_off_note = NULL,
            overdue_notified_at = NULL,
