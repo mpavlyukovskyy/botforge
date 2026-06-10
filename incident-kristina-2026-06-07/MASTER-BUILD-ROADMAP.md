@@ -31,8 +31,8 @@ Extend `TaskItemStatus` enum (+IN_PROGRESS, +WAITING) — NO new `lane` axis; re
 **S7 — Phase D-step3: blocked-interval decay subtraction.**
 `computeDecayValue` subtracts `blockedSecondsTotal` so unblock resumes fairly (the only real B-full→D coupling).
 
-**S8 — Phase E: milestones.**
-`parentTaskId`/`isProject`/`valueShare` (weight); child earned = parentTieredValue × (share/Σshares) × decay × quality (PARTITION, never multiply); ≤1 active milestone per parent occupies a WIP slot; project rollup. Tests: decompose-doesn't-multiply, rollup, 1-active-per-parent.
+**S8 — Phase E: milestones. ✅ SHIPPED (2026-06-10).**
+`parentTaskId`/`isProject`/`valueShare` (weight); child earned = parentTieredValue × (share/Σshares) × decay (PARTITION, never multiply); project container earns 0; project rollup in board_state (open-milestone count, containers excluded from Top 3). `decompose` tool (owner-or-Mark). Migration `20260610230000_add_milestones` applied to prod (additive). 133 bot tests green incl. milestone-partition (3x project split into 3 = 3 total not 9; unequal shares proportional; container=0). Flag still OFF.
 
 **S9 — Dashboard full surface.**
 4-lane board (To Do/In Progress/Waiting/Done), WIP indicator (client-enforced before optimistic move; structured rejection, no silent catch), reopen/excellent buttons (Mark-only), scoreboard (pool/streak/wins/biggest-save, replaces loss-ledger), budget meter. Built on S1's typed mapper.
