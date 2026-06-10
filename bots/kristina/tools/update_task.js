@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { getColumns, findColumnByName, updateItem, findTaskByIdPrefix, ensureDb } from '../lib/atlas-client.js';
 import { isAdmin } from '../lib/db.js';
 import { normalizeDeadline } from '../lib/deadline.js';
+import { normalizeTier } from '../lib/tier.js';
 
 const updateTask = {
   name: 'update_task',
@@ -12,6 +13,7 @@ const updateTask = {
     assignee: z.string().optional().describe('New assignee'),
     deadline: z.string().optional().describe('New deadline (YYYY-MM-DD)'),
     column: z.string().optional().describe('Column to move the task to'),
+    tier: z.string().optional().describe('Priority tier: ROUTINE | STANDARD | IMPORTANT | P0. Mark only.'),
   },
   execute: async (args, ctx) => {
     const db = ensureDb(ctx.config);
@@ -22,6 +24,10 @@ const updateTask = {
     // re-assign, but only Mark sets/extends due dates.
     if (args.deadline && !isAdmin(ctx)) {
       return `Only Mark can change deadlines. Ask him to set "${task.title}" to ${args.deadline}.`;
+    }
+    // Priority tier is Mark's lever too.
+    if (args.tier && !isAdmin(ctx)) {
+      return `Only Mark can change a task's priority. Ask him to set "${task.title}" to ${args.tier}.`;
     }
 
     const spokId = task.spok_id;
@@ -35,6 +41,8 @@ const updateTask = {
     if (args.title) updates.title = args.title;
     if (args.assignee) updates.assignee = args.assignee;
     if (deadline) updates.deadline = deadline;
+    const tier = args.tier ? normalizeTier(args.tier) : undefined;
+    if (tier) updates.priorityTier = tier;
 
     // Resolve column move
     if (args.column) {
@@ -56,6 +64,9 @@ const updateTask = {
     }
     if (deadline) {
       db.prepare("UPDATE tasks SET deadline = ?, updated_at = datetime('now') WHERE id = ?").run(deadline, task.id);
+    }
+    if (tier) {
+      db.prepare("UPDATE tasks SET priority_tier = ?, updated_at = datetime('now') WHERE id = ?").run(tier, task.id);
     }
 
     // Update on Atlas

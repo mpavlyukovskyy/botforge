@@ -38,9 +38,23 @@ beforeEach(() => {
   db.exec(`CREATE TABLE tasks (
     id TEXT PRIMARY KEY, spok_id TEXT, title TEXT, column_name TEXT, column_id TEXT,
     assignee TEXT, deadline TEXT, status TEXT DEFAULT 'OPEN', earned_status TEXT,
-    current_value REAL, requester TEXT, requester_chat_id TEXT, synced_at TEXT,
-    created_at TEXT, updated_at TEXT);`);
+    current_value REAL, requester TEXT, requester_chat_id TEXT, priority_tier TEXT DEFAULT 'STANDARD',
+    synced_at TEXT, created_at TEXT, updated_at TEXT);`);
   snapshotResult = [];
+});
+
+describe('reconcile — priorityTier round-trip', () => {
+  it('learns priorityTier from Atlas on insert', async () => {
+    snapshotResult = [{ id: 'cuid_p', title: 'big rock', status: 'OPEN', priorityTier: 'P0' }];
+    await reconcile(ctx);
+    expect(db.prepare("SELECT priority_tier FROM tasks WHERE spok_id='cuid_p'").get().priority_tier).toBe('P0');
+  });
+  it('updates priorityTier from Atlas on upsert (Atlas is authority)', async () => {
+    db.prepare("INSERT INTO tasks (id, spok_id, title, status, priority_tier) VALUES ('l1','cuid_1','t','OPEN','STANDARD')").run();
+    snapshotResult = [{ id: 'cuid_1', title: 't', status: 'OPEN', priorityTier: 'IMPORTANT' }];
+    await reconcile(ctx);
+    expect(db.prepare("SELECT priority_tier FROM tasks WHERE spok_id='cuid_1'").get().priority_tier).toBe('IMPORTANT');
+  });
 });
 
 describe('reconcile — ghost reap', () => {

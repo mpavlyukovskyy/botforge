@@ -6,6 +6,7 @@
 import { getItems, getColumns } from '../lib/atlas-client.js';
 import { getRegisteredChat, isAdmin } from '../lib/db.js';
 import { computeDecayValue } from '../lib/decay.js';
+import { rankScore, tierTag } from '../lib/tier.js';
 
 export default {
   type: 'board_state',
@@ -49,7 +50,8 @@ export default {
         const col = item.columnName || 'Unassigned';
         if (!byColumn[col]) byColumn[col] = [];
 
-        let entry = `- ID:${item.id.slice(0, 8)} | ${item.title}`;
+        const tag = tierTag(item.priorityTier);
+        let entry = `- ID:${item.id.slice(0, 8)} | ${tag ? tag + ' ' : ''}${item.title}`;
         if (item.assignee) entry += ` | @${item.assignee}`;
         if (item.deadline) {
           entry += ` | due:${item.deadline}`;
@@ -65,7 +67,21 @@ export default {
         byColumn[col].push(entry);
       }
 
+      // WSJF "Today's Top 3" \u2014 highest priority-weight \u00d7 deadline-urgency among
+      // not-done items. Gives the brain (and Kristina) an at-a-glance focus list
+      // so high-tier / due-soon work is worked first.
       let text = '';
+      const active = filtered.filter(i => i.status !== 'DONE' && (i.columnName || '') !== 'Done');
+      if (active.length > 0) {
+        const top = [...active].sort((a, b) => rankScore(b, now) - rankScore(a, now)).slice(0, 3);
+        text += 'Today\'s Top 3 (by priority \u00d7 urgency):\n';
+        top.forEach((i, n) => {
+          const tag = tierTag(i.priorityTier);
+          text += `${n + 1}. ID:${i.id.slice(0, 8)} | ${tag ? tag + ' ' : ''}${i.title}${i.deadline ? ` | due:${i.deadline}` : ''}\n`;
+        });
+        text += '\n';
+      }
+
       for (const [colName, entries] of Object.entries(byColumn)) {
         text += `${colName}:\n${entries.join('\n')}\n\n`;
       }

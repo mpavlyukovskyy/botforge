@@ -16,7 +16,7 @@ vi.mock('../lib/atlas-client.js', () => ({
   createItem: createItemSpy,
   updateItem: async () => true,
 }));
-vi.mock('../lib/db.js', () => ({ getRegisteredChat: () => ({ requester_name: 'Mark' }) }));
+vi.mock('../lib/db.js', () => ({ getRegisteredChat: () => ({ requester_name: 'Mark' }), isAdmin: () => true }));
 
 const createTask = (await import('./create_task.js')).default;
 
@@ -26,7 +26,7 @@ beforeEach(() => {
   db = new Database(':memory:');
   db.exec(`CREATE TABLE tasks (id TEXT PRIMARY KEY, spok_id TEXT, title TEXT, column_name TEXT,
     column_id TEXT, assignee TEXT, deadline TEXT, status TEXT DEFAULT 'OPEN', requester TEXT,
-    requester_chat_id TEXT, synced_at TEXT, created_at TEXT, updated_at TEXT);
+    requester_chat_id TEXT, priority_tier TEXT DEFAULT 'STANDARD', synced_at TEXT, created_at TEXT, updated_at TEXT);
    CREATE TABLE task_subtasks (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, title TEXT, display_order INT, synced_at TEXT);`);
   createItemSpy.mockClear();
 });

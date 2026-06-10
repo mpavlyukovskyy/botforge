@@ -44,7 +44,8 @@ export function ensureDb(config) {
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         requester TEXT,
-        requester_chat_id TEXT
+        requester_chat_id TEXT,
+        priority_tier TEXT DEFAULT 'STANDARD'
       );
 
       CREATE TABLE IF NOT EXISTS task_subtasks (
@@ -219,7 +220,7 @@ function getLocalItems(ctx, opts = {}) {
     const params = [];
     if (opts.status) { where.push('status = ?'); params.push(opts.status); }
     if (opts.columnId) { where.push('column_id = ?'); params.push(opts.columnId); }
-    const sql = `SELECT id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, requester
+    const sql = `SELECT id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, requester, priority_tier
                  FROM tasks ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at`;
     items = db.prepare(sql).all(...params).map(r => ({
       // Prefer the Atlas id so board IDs match the synced board; fall back to
@@ -234,6 +235,7 @@ function getLocalItems(ctx, opts = {}) {
       status: r.status,
       earnedStatus: r.earned_status || null,
       requester: r.requester || null,
+      priorityTier: r.priority_tier || 'STANDARD',
     }));
   } catch (err) {
     ctx.log.error(`[atlas] Local fallback read failed: ${err}`);
@@ -480,7 +482,7 @@ export async function retrySyncPending(ctx) {
 
   // Phase 1: Unsynced tasks
   const pending = db
-    .prepare('SELECT id, title, column_id, assignee, deadline, status, requester, requester_chat_id FROM tasks WHERE synced_at IS NULL')
+    .prepare('SELECT id, title, column_id, assignee, deadline, status, requester, requester_chat_id, priority_tier FROM tasks WHERE synced_at IS NULL')
     .all();
 
   for (const task of pending) {
@@ -513,6 +515,7 @@ export async function retrySyncPending(ctx) {
       subtasks: subtasks.length > 0 ? subtasks : undefined,
       requester: task.requester || undefined,
       requesterChatId: task.requester_chat_id || undefined,
+      priorityTier: task.priority_tier || 'STANDARD',
       // Idempotency: if this task already reached Atlas on a prior attempt
       // whose response was lost, the upsert-on-externalId returns that row
       // instead of duplicating. externalId == local id.

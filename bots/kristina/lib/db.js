@@ -24,6 +24,8 @@ export function runMigrations(ctx) {
   try { db.exec("ALTER TABLE tasks ADD COLUMN done_synced INTEGER DEFAULT 0"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'telegram'"); } catch {}
   try { db.exec("ALTER TABLE tasks ADD COLUMN telegram_msg_id TEXT"); } catch {}
+  // Phase A: priority tier (Mark's prioritization lever). Sequencing signal only.
+  try { db.exec("ALTER TABLE tasks ADD COLUMN priority_tier TEXT DEFAULT 'STANDARD'"); } catch {}
 
   // callback_tracking table
   db.exec(`

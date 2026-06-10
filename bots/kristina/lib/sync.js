@@ -55,11 +55,11 @@ export async function reconcile(ctx) {
     const findByCuid = db.prepare("SELECT id, spok_id FROM tasks WHERE spok_id = ?");
     const findByExt = db.prepare("SELECT id, spok_id FROM tasks WHERE id = ?");
     const insertRow = db.prepare(
-      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, current_value, requester, requester_chat_id, synced_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`
+      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, earned_status, current_value, requester, requester_chat_id, priority_tier, synced_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`
     );
     const updateRow = db.prepare(
-      `UPDATE tasks SET spok_id = ?, title = ?, column_name = ?, column_id = ?, assignee = ?, deadline = ?, status = ?, earned_status = ?, current_value = ?, requester = ?, synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+      `UPDATE tasks SET spok_id = ?, title = ?, column_name = ?, column_id = ?, assignee = ?, deadline = ?, status = ?, earned_status = ?, current_value = ?, requester = ?, priority_tier = ?, synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
     );
 
     let upserted = 0, inserted = 0, reaped = 0;
@@ -68,18 +68,19 @@ export async function reconcile(ctx) {
       // 1) Upsert every live Atlas row into local (Atlas is the truth).
       for (const a of live) {
         const earnedValue = a.earnedValue != null ? Number(a.earnedValue) : null;
+        const tier = a.priorityTier || 'STANDARD';
         let localRow = findByCuid.get(a.id);
         if (!localRow && a.externalId) localRow = findByExt.get(a.externalId); // heal/link
         if (localRow) {
           updateRow.run(a.id, a.title, a.columnName || null, a.columnId || null, a.assignee || null,
-            a.deadline || null, a.status, a.earnedStatus || null, earnedValue, a.requester || null, localRow.id);
+            a.deadline || null, a.status, a.earnedStatus || null, earnedValue, a.requester || null, tier, localRow.id);
           upserted++;
         } else {
           // A task that exists in Atlas but not locally (e.g. created on the
           // dashboard). Learn it. Use the Atlas cuid as the local id too.
           insertRow.run(a.externalId || a.id, a.id, a.title, a.columnName || null, a.columnId || null,
             a.assignee || null, a.deadline || null, a.status, a.earnedStatus || null, earnedValue,
-            a.requester || null, a.requesterChatId || null);
+            a.requester || null, a.requesterChatId || null, tier);
           inserted++;
         }
       }

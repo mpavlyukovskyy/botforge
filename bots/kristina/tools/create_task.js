@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { getColumns, findColumnByName, createItem, updateItem, ensureDb } from '../lib/atlas-client.js';
-import { getRegisteredChat } from '../lib/db.js';
+import { getRegisteredChat, isAdmin } from '../lib/db.js';
 import { normalizeDeadline } from '../lib/deadline.js';
+import { normalizeTier } from '../lib/tier.js';
 
 const createTask = {
   name: 'create_task',
@@ -13,6 +14,7 @@ const createTask = {
     deadline: z.string().optional().describe('Deadline as ISO date (YYYY-MM-DD)'),
     done: z.boolean().optional().describe('If true, create and immediately mark as done (places in Done column with DONE status)'),
     subtasks: z.array(z.string()).optional().describe('Checklist items / subtasks to create with the task'),
+    tier: z.string().optional().describe('Priority tier: ROUTINE | STANDARD | IMPORTANT | P0. Only Mark can set above STANDARD.'),
   },
   execute: async (args, ctx) => {
     const db = ensureDb(ctx.config);
@@ -68,6 +70,11 @@ const createTask = {
     const registered = getRegisteredChat({ config: ctx.config }, ctx.chatId, ctx.userId);
     const requester = registered?.requester_name || ctx.userName || 'Unknown';
 
+    // Priority tier is Mark's lever: clamp non-admins to STANDARD so an
+    // assistant can't self-assign P0/IMPORTANT (which would game the priority
+    // queue, and — once tiers become money multipliers — the payout).
+    const tier = isAdmin(ctx) ? normalizeTier(args.tier) : 'STANDARD';
+
     // Create in Atlas
     const atlasResult = await createItem(ctx, {
       title,
@@ -77,6 +84,7 @@ const createTask = {
       subtasks,
       requester,
       requesterChatId: ctx.chatId,
+      priorityTier: tier,
       // Idempotency key: a retried/replayed POST with this externalId returns
       // the existing Atlas row instead of creating a duplicate (the duplicate
       // class the 2026-06 incidents kept hitting). externalId == local id.
@@ -85,8 +93,8 @@ const createTask = {
 
     // Save locally
     db.prepare(
-      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, synced_at, requester, requester_chat_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+      `INSERT INTO tasks (id, spok_id, title, column_name, column_id, assignee, deadline, status, synced_at, requester, requester_chat_id, priority_tier, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
     ).run(
       taskId,
       atlasResult?.atlasId || null,
@@ -99,6 +107,7 @@ const createTask = {
       atlasResult ? new Date().toISOString() : null,
       requester,
       ctx.chatId,
+      tier,
     );
 
     // Mark done on Atlas if requested
