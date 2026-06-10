@@ -15,6 +15,7 @@
 import { ensureDb, updateItem } from '../lib/atlas-client.js';
 import { computeDecayValue } from '../lib/decay.js';
 import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
+import { reconcile } from '../lib/sync.js';
 
 const NOTIFY_THRESHOLDS = [0.10, 0.0, -1.0, -2.0, -3.0];
 
@@ -23,8 +24,18 @@ export default {
   async execute(ctx) {
     const db = ensureDb(ctx.config);
 
-    // Bleed-stopper: never decay/notify a task Atlas no longer has, and don't
-    // act at all when Atlas can't be verified. See lib/presence.js.
+    // Phase 0: make the local cache equal Atlas truth BEFORE acting on money.
+    // Only an explicit abort (Atlas unverifiable) skips the run; a 'skipped'
+    // result (another reconcile already running / disabled) falls through to the
+    // presence guard below (belt-and-suspenders). See red-team D3.
+    const rep = await reconcile(ctx);
+    if (rep?.aborted) {
+      ctx.log.warn(`decay_check: reconcile aborted (${rep.aborted}), skipping run`);
+      return;
+    }
+
+    // Bleed-stopper backstop: never decay/notify a task Atlas no longer has,
+    // and don't act when Atlas can't be verified. See lib/presence.js.
     const presence = await loadAtlasPresence(ctx);
     if (shouldSkipRun(presence)) {
       ctx.log.warn('decay_check: Atlas unverifiable, skipping run');

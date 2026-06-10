@@ -14,6 +14,7 @@ import { ensureDb, syncDeduction } from '../lib/atlas-client.js';
 import { isWorkingDay, TIMEZONE } from '../lib/working-hours.js';
 import { getCurrentBillingMonth } from '../lib/db.js';
 import { loadAtlasPresence, shouldSkipRun } from '../lib/presence.js';
+import { reconcile } from '../lib/sync.js';
 
 const DAILY_DEDUCTION_CAP = 5; // 50 nudges = $5.00 max per chat
 const DEDUCTION_CENTS = 10;
@@ -30,9 +31,17 @@ export default {
 
     const db = ensureDb(ctx.config);
 
-    // Bleed-stopper: never charge money for a task Atlas no longer has, and
-    // never charge when Atlas can't be verified (acting on unverifiable state
-    // is how ghosts got charged). See lib/presence.js.
+    // Phase 0: money cron — reconcile to Atlas truth FIRST so we never charge
+    // against a stale cache. Only an explicit abort skips; skipped/disabled
+    // falls through to the presence backstop below. RT-D3.
+    const rep = await reconcile(ctx);
+    if (rep?.aborted) {
+      ctx.log.warn(`nudge_deductions: reconcile aborted (${rep.aborted}), skipping run`);
+      return;
+    }
+
+    // Bleed-stopper backstop: never charge money for a task Atlas no longer has,
+    // and never charge when Atlas can't be verified. See lib/presence.js.
     const presence = await loadAtlasPresence(ctx);
     if (shouldSkipRun(presence)) {
       ctx.log.warn('nudge_deductions: Atlas unverifiable, skipping run');
