@@ -1,0 +1,11 @@
+[Unit]
+Description=mp-finance-db (Atlas) encrypted backup + restore-verify
+After=postgresql.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=m
+# flyctl lives in ~/.fly/bin; keep postgres client tools + system bins on PATH.
+Environment=PATH=/home/m/.fly/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/bash /opt/mp-finance-db/backup.sh
