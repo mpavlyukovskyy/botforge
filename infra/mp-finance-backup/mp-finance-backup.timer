@@ -1,0 +1,10 @@
+[Unit]
+Description=mp-finance-db backup 2x/day (Persistent: catches up after downtime)
+
+[Timer]
+# 03:30 and 15:30 UTC — offset 30min after brain-backup (03:00) to avoid contention.
+OnCalendar=*-*-* 03,15:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

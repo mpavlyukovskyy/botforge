@@ -91,3 +91,37 @@ for entry in "${FLEET[@]}"; do
     fi
   fi
 done
+
+# --- mp-finance-db backup staleness (secondary, on-box layer) ---------------
+# Primary dead-man's switch is the off-box Uptime Kuma push from backup.sh (it
+# survives acemagic dying). This is the fast, detailed on-box backstop: it reads
+# the PASS/FAIL ground-truth state file (written from a REAL scratch restore +
+# BYTEA byte-count), NOT mere file existence — a structurally-valid-but-empty
+# dump still screams. Backups run every 12h; alert if the last good run is >26h.
+MPF_STATE="${STATE_DIR}/mp-finance-last-verify.txt"
+MPF_ALERT="${STATE_DIR}/mp-finance-backup-alert.txt"
+MPF_REASON=""
+if [ ! -f "$MPF_STATE" ]; then
+  MPF_REASON="no verify-state file (backup never completed a PASS)"
+else
+  MPF_LINE=$(cat "$MPF_STATE" 2>/dev/null || echo "")
+  MPF_AGE_H=$(( ( $(date -u +%s) - $(stat -c %Y "$MPF_STATE" 2>/dev/null || echo 0) ) / 3600 ))
+  case "$MPF_LINE" in
+    FAIL*)  MPF_REASON="last run FAILED: ${MPF_LINE#FAIL }" ;;
+    PASS*)  [ "$MPF_AGE_H" -gt 26 ] && MPF_REASON="last good backup ${MPF_AGE_H}h ago (>26h) — schedule may be dead"
+            case "$MPF_LINE" in *attach_bytes=0*) MPF_REASON="last 'PASS' has attach_bytes=0 (binary data missing)";; esac ;;
+    *)      MPF_REASON="unrecognized verify-state: ${MPF_LINE}" ;;
+  esac
+fi
+if [ -z "$MPF_REASON" ]; then
+  if [ -f "$MPF_ALERT" ]; then
+    send_tg "✅ mp-finance-db backup recovered @ ${NOW_UTC} ($(cat "$MPF_STATE" 2>/dev/null))."
+    rm -f "$MPF_ALERT"
+  fi
+else
+  LAST=$(cat "$MPF_ALERT" 2>/dev/null || echo "")
+  if [ "$LAST" != "$HOUR_KEY" ]; then
+    echo "$HOUR_KEY" > "$MPF_ALERT"
+    send_tg "🚨 mp-finance-db BACKUP problem @ ${NOW_UTC} — ${MPF_REASON}. The Atlas/comp+finance DB may be unprotected. Check: journalctl -u mp-finance-backup -n 50; cat ${MPF_STATE}"
+  fi
+fi
