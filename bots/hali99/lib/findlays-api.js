@@ -35,6 +35,36 @@ export async function callDashboard(path) {
   return { status: res.status, body };
 }
 
+/**
+ * POST variant for the fix-agent endpoints. Same non-throwing contract as
+ * callDashboard: {status, body} on any HTTP status; throws only on transport
+ * failures.
+ */
+export async function postDashboard(path, payload) {
+  const base = process.env.FINDLAYS_WEBSITE_URL;
+  const secret = process.env.HALI99_SHARED_SECRET;
+  if (!base || !secret) {
+    throw new Error('FINDLAYS_WEBSITE_URL or HALI99_SHARED_SECRET not configured');
+  }
+  const url = `${base.replace(/\/$/, '')}${path}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload ?? {}),
+    signal: AbortSignal.timeout(25_000),
+  });
+  let body = {};
+  try {
+    body = await res.json();
+  } catch {
+    // non-JSON body — leave empty
+  }
+  return { status: res.status, body };
+}
+
 const GENERIC_FAIL = "Couldn't fetch order status — try again in a minute.";
 
 /**

@@ -13,6 +13,8 @@ export default {
         '/orders yesterday — a previous day (or /orders 2026-06-10)\n' +
         '/unpaid — unpaid online orders (last 7 days)\n' +
         '/order <id> — full status of one order\n' +
+        '/fix — billing fix menu (open issues with confirm buttons)\n' +
+        '/fixmap <mapId> <ccId> — repair a flagged customer mapping\n' +
         '\n' +
         'New-order and payment alerts post here automatically.',
     });
