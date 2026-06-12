@@ -17,8 +17,64 @@ export function ensureDb(config) {
     _db = new Database(`data/${config.name}-trainer.db`);
     _db.pragma('journal_mode = WAL');
     _db.pragma('foreign_keys = ON');
+    _db.pragma('busy_timeout = 5000');
+    migrateOAuthTokens(_db);
   }
   return _db;
+}
+
+export function nowSec() {
+  return Math.floor(Date.now() / 1000);
+}
+
+// Lock stolen if held longer than this. Must exceed the refresh fetch timeout
+// (30s) by a wide margin so a hung holder can never overlap a stealer.
+export const OAUTH_LOCK_STEAL_SEC = 120;
+
+/**
+ * oauth_tokens migration runs at first DB touch — NOT only in the lifecycle
+ * start hook — because cron jobs are scheduled before start hooks fire and a
+ * tick in that window would hit missing columns.
+ *
+ * All timestamp columns here are JS epoch SECONDS (never compared against
+ * SQL datetime('now'), which fake timers can't control in tests).
+ */
+function migrateOAuthTokens(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      provider TEXT PRIMARY KEY,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT,
+      expires_at INTEGER,
+      locked_at INTEGER,
+      updated_at TEXT DEFAULT (datetime('now')),
+      status TEXT DEFAULT 'active',
+      dead_reason TEXT,
+      dead_at INTEGER,
+      consecutive_invalid_request INTEGER DEFAULT 0,
+      first_transient_failure_at INTEGER,
+      lock_token TEXT,
+      last_dead_probe_at INTEGER
+    );
+  `);
+  const alters = [
+    "ALTER TABLE oauth_tokens ADD COLUMN status TEXT DEFAULT 'active'",
+    'ALTER TABLE oauth_tokens ADD COLUMN dead_reason TEXT',
+    'ALTER TABLE oauth_tokens ADD COLUMN dead_at INTEGER',
+    'ALTER TABLE oauth_tokens ADD COLUMN consecutive_invalid_request INTEGER DEFAULT 0',
+    'ALTER TABLE oauth_tokens ADD COLUMN first_transient_failure_at INTEGER',
+    'ALTER TABLE oauth_tokens ADD COLUMN lock_token TEXT',
+    'ALTER TABLE oauth_tokens ADD COLUMN last_dead_probe_at INTEGER',
+  ];
+  for (const sql of alters) {
+    try {
+      db.exec(sql);
+    } catch (err) {
+      // Only an already-applied migration is ignorable; SQLITE_BUSY or any
+      // other failure must surface, not silently leave columns missing.
+      if (!/duplicate column name/i.test(err.message)) throw err;
+    }
+  }
 }
 
 export function getDb(config) {
@@ -443,6 +499,12 @@ export function getRecentCheckIns(config, type, limit = 4) {
 }
 
 // ─── OAuth token helpers ────────────────────────────────────────────────────
+//
+// Token-rotation safety model (see docs/RCA-whoop-token-spam-2026-06-11.md):
+// Whoop rotates refresh tokens on every use with reuse-revocation of the whole
+// grant chain, so every write here is compare-and-swap'd on the refresh token
+// that was actually presented. INSERT OR REPLACE is banned on oauth_tokens —
+// REPLACE deletes+reinserts the row, silently resetting state columns.
 
 export function getOAuthToken(config, provider) {
   const db = ensureDb(config);
@@ -452,23 +514,111 @@ export function getOAuthToken(config, provider) {
 export function upsertOAuthToken(config, provider, accessToken, refreshToken, expiresAt) {
   const db = ensureDb(config);
   return db.prepare(`
-    INSERT OR REPLACE INTO oauth_tokens (provider, access_token, refresh_token, expires_at, updated_at)
+    INSERT INTO oauth_tokens (provider, access_token, refresh_token, expires_at, updated_at)
     VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(provider) DO UPDATE SET
+      access_token = excluded.access_token,
+      refresh_token = excluded.refresh_token,
+      expires_at = excluded.expires_at,
+      updated_at = datetime('now')
   `).run(provider, accessToken, refreshToken || null, expiresAt || null);
 }
 
+/**
+ * Acquire the refresh lock. Returns an ownership token (string) on success,
+ * null if another holder has it. A lock older than OAUTH_LOCK_STEAL_SEC is
+ * considered abandoned (crashed holder) and is stolen.
+ */
 export function lockOAuthToken(config, provider) {
   const db = ensureDb(config);
-  const now = Math.floor(Date.now() / 1000);
-  const result = db.prepare(
-    'UPDATE oauth_tokens SET locked_at = ? WHERE provider = ? AND (locked_at IS NULL OR locked_at < ?)'
-  ).run(now, provider, now - 30);
-  return result.changes > 0;
+  const now = nowSec();
+  const lockToken = `${process.pid}-${now}-${Math.random().toString(36).slice(2, 10)}`;
+  const result = db.prepare(`
+    UPDATE oauth_tokens SET locked_at = ?, lock_token = ?
+    WHERE provider = ? AND (locked_at IS NULL OR locked_at < ?)
+  `).run(now, lockToken, provider, now - OAUTH_LOCK_STEAL_SEC);
+  return result.changes > 0 ? lockToken : null;
 }
 
-export function unlockOAuthToken(config, provider) {
+/** Release only OUR lock — never clear a stealer's lock from a stale finally. */
+export function unlockOAuthToken(config, provider, lockToken) {
   const db = ensureDb(config);
-  db.prepare('UPDATE oauth_tokens SET locked_at = NULL WHERE provider = ?').run(provider);
+  db.prepare(
+    'UPDATE oauth_tokens SET locked_at = NULL, lock_token = NULL WHERE provider = ? AND lock_token = ?'
+  ).run(provider, lockToken || '');
+}
+
+/**
+ * Persist a successful refresh iff the row still holds the refresh token we
+ * presented. Resets ALL failure/dead state in the same statement.
+ * Returns false when the token rotated under us (caller must re-read, discard).
+ */
+export function casUpdateTokenOnSuccess(config, provider, usedRefreshToken, { accessToken, refreshToken, expiresAt }) {
+  const db = ensureDb(config);
+  const r = db.prepare(`
+    UPDATE oauth_tokens SET
+      access_token = ?, refresh_token = ?, expires_at = ?,
+      status = 'active', dead_reason = NULL, dead_at = NULL,
+      consecutive_invalid_request = 0, first_transient_failure_at = NULL,
+      last_dead_probe_at = NULL, updated_at = datetime('now')
+    WHERE provider = ? AND refresh_token = ?
+  `).run(accessToken, refreshToken, expiresAt, provider, usedRefreshToken);
+  return r.changes > 0;
+}
+
+/**
+ * Mark the token dead iff the row still holds the refresh token we presented.
+ * Sets last_dead_probe_at = dead_at so the first escape-hatch verification
+ * happens at dead_at + 12h, not immediately.
+ * Returns false when the token rotated under us (failure was stale — transient).
+ */
+export function casMarkTokenDead(config, provider, usedRefreshToken, reason) {
+  const db = ensureDb(config);
+  const now = nowSec();
+  const r = db.prepare(`
+    UPDATE oauth_tokens SET status = 'dead', dead_reason = ?, dead_at = ?, last_dead_probe_at = ?
+    WHERE provider = ? AND refresh_token = ?
+  `).run(reason, now, now, provider, usedRefreshToken);
+  return r.changes > 0;
+}
+
+/**
+ * Increment the consecutive generic-invalid_request counter (CAS'd).
+ * Returns the new count, or null if the token rotated under us.
+ */
+export function casIncrementInvalidRequest(config, provider, usedRefreshToken) {
+  const db = ensureDb(config);
+  const r = db.prepare(`
+    UPDATE oauth_tokens SET consecutive_invalid_request = consecutive_invalid_request + 1
+    WHERE provider = ? AND refresh_token = ?
+  `).run(provider, usedRefreshToken);
+  if (r.changes === 0) return null;
+  return db.prepare('SELECT consecutive_invalid_request FROM oauth_tokens WHERE provider = ?')
+    .get(provider).consecutive_invalid_request;
+}
+
+/** Stamp the start of a transient-failure window (only if not already open). */
+export function setFirstTransientFailure(config, provider) {
+  const db = ensureDb(config);
+  db.prepare(
+    'UPDATE oauth_tokens SET first_transient_failure_at = ? WHERE provider = ? AND first_transient_failure_at IS NULL'
+  ).run(nowSec(), provider);
+}
+
+/**
+ * Claim the right to run ONE dead-token verification refresh (escape hatch).
+ * CAS'd so exactly one caller — across processes and restarts — probes per
+ * interval. Returns true only for the winner.
+ */
+export function casClaimDeadProbe(config, provider, seenRefreshToken, intervalSec = 43200) {
+  const db = ensureDb(config);
+  const now = nowSec();
+  const r = db.prepare(`
+    UPDATE oauth_tokens SET last_dead_probe_at = ?
+    WHERE provider = ? AND status = 'dead' AND refresh_token = ?
+      AND (last_dead_probe_at IS NULL OR last_dead_probe_at < ?)
+  `).run(now, provider, seenRefreshToken, now - intervalSec);
+  return r.changes > 0;
 }
 
 // ─── Onboarding analysis helpers ──────────────────────────────────────────
@@ -715,6 +865,11 @@ export function setState(config, key, value) {
     INSERT OR REPLACE INTO bot_state (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
   `).run(key, value);
+}
+
+export function deleteState(config, key) {
+  const db = ensureDb(config);
+  return db.prepare('DELETE FROM bot_state WHERE key = ?').run(key);
 }
 
 // ─── Workout notification dedup helpers ──────────────────────────────────

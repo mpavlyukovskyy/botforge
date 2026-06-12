@@ -14,16 +14,19 @@
  * returns a recovery score with a sleep_end timestamp that actually falls on
  * the target date.
  */
-import { getRecovery, getSleep, getCycles, getAccessToken } from './whoop-client.js';
+import { getRecovery, getSleep, getCycles, getAccessToken, ReauthRequiredError } from './whoop-client.js';
 import { getRecoveryForDate, upsertRecovery } from './db.js';
 
 const STALE_AGE_MS = 6 * 3600_000; // 6h — treat older rows as stale and JIT-refresh
 
-const FETCH_TIMEOUT_MS = 12_000;
+// Must exceed the worst-case token path (30s refresh fetch + 15s lock wait),
+// otherwise every JIT fetch that lands during a refresh deterministically
+// times out while its orphaned chain keeps running.
+const FETCH_TIMEOUT_MS = 45_000;
 const BASE = 'https://api.prod.whoop.com/developer/v2';
 
 /** Pull all paginated records in a range. Mirrors whoop-backfill.js. */
-async function fetchPaginated(config, path, start, end) {
+async function fetchPaginated(config, path, start, end, signal) {
   const all = [];
   let nextToken = null;
   let pages = 0;
@@ -36,6 +39,7 @@ async function fetchPaginated(config, path, start, end) {
     if (nextToken) url.searchParams.set('nextToken', nextToken);
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
+      signal,
     });
     if (!res.ok) throw new Error(`Whoop ${path} ${res.status}`);
     const data = await res.json();
@@ -57,14 +61,16 @@ async function fetchPaginated(config, path, start, end) {
  * @returns {Promise<{fetched: boolean, recovery: number|null, sleepMin: number|null, reason: string}>}
  */
 export async function fetchAndStoreTodayRecovery(config, todayEt, log = console) {
+  // One AbortController threaded through every fetch — when the deadline
+  // fires, the underlying requests are actually cancelled instead of orphaned
+  // (an orphaned chain kept running and contending the token lock before).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const [recovery, sleep, cycles] = await Promise.race([
-      Promise.all([
-        fetchPaginated(config, '/recovery', todayEt, todayEt),
-        fetchPaginated(config, '/activity/sleep', todayEt, todayEt),
-        fetchPaginated(config, '/cycle', todayEt, todayEt),
-      ]),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('whoop_timeout')), FETCH_TIMEOUT_MS)),
+    const [recovery, sleep, cycles] = await Promise.all([
+      fetchPaginated(config, '/recovery', todayEt, todayEt, controller.signal),
+      fetchPaginated(config, '/activity/sleep', todayEt, todayEt, controller.signal),
+      fetchPaginated(config, '/cycle', todayEt, todayEt, controller.signal),
     ]);
 
     // Find the recovery record whose paired sleep ENDED on todayEt
@@ -156,8 +162,17 @@ export async function fetchAndStoreTodayRecovery(config, todayEt, log = console)
     log.info?.(`recovery-fetch: ${todayEt} recovery=${recoveryScore} hrv=${Math.round(hrv || 0)} sleep=${sleepMin}min`);
     return { fetched: true, recovery: recoveryScore, sleepMin, reason: 'ok' };
   } catch (err) {
-    log.warn?.(`recovery-fetch: ${err.message}`);
-    return { fetched: false, recovery: null, sleepMin: null, reason: err.message };
+    if (err instanceof ReauthRequiredError) {
+      // Dead token is already alerted (once) by the token cron — this path
+      // must stay quiet or it becomes a second spam vector.
+      log.info?.('recovery-fetch: reauth-pending skip');
+      return { fetched: false, recovery: null, sleepMin: null, reason: 'reauth_required' };
+    }
+    const msg = err.name === 'AbortError' ? 'whoop_timeout' : err.message;
+    log.warn?.(`recovery-fetch: ${msg}`);
+    return { fetched: false, recovery: null, sleepMin: null, reason: msg };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
