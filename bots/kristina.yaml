@@ -24,6 +24,7 @@ brain:
     - block_task
     - unblock_task
     - decompose
+    - upload_statement
     - record_deduction
     - contest_deduction
     - reverse_deduction

@@ -3,6 +3,9 @@ import { getColumns, findColumnByName, updateItem, findTaskByIdPrefix, ensureDb 
 import { isAdmin } from '../lib/db.js';
 import { normalizeDeadline } from '../lib/deadline.js';
 import { normalizeTier } from '../lib/tier.js';
+import { getFlag } from '../lib/flags.js';
+
+const WIP_LIMIT = 3; // S9: max active tasks in In Progress (must match dashboard/server)
 
 const updateTask = {
   name: 'update_task',
@@ -49,6 +52,19 @@ const updateTask = {
       const columns = await getColumns(ctx);
       const col = findColumnByName(args.column, columns);
       if (col) {
+        // S9 WIP cap: refuse a move into In Progress when it's already full, so
+        // Kristina gets told here instead of the move bouncing back on reconcile
+        // (the dashboard + Atlas API enforce the same limit as the hard backstop).
+        const isInProgress = col.slug === 'in-progress' || /in.?progress/i.test(col.name || '');
+        const alreadyThere = (task.column_name || '') === col.name;
+        if (getFlag('INCENTIVE_V2') && isInProgress && !alreadyThere) {
+          const n = db.prepare(
+            "SELECT COUNT(*) c FROM tasks WHERE column_id = ? AND id != ? AND status = 'OPEN' AND (blocked_at IS NULL OR blocked_at = '')"
+          ).get(col.id, task.id).c;
+          if (n >= WIP_LIMIT) {
+            return `In Progress is full (${WIP_LIMIT} max) — finish or move one out before starting "${task.title}".`;
+          }
+        }
         updates.columnId = col.id;
         db.prepare("UPDATE tasks SET column_id = ?, column_name = ?, updated_at = datetime('now') WHERE id = ?")
           .run(col.id, col.name, task.id);
