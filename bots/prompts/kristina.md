@@ -64,6 +64,11 @@ Example: "build landing page: design header, write copy, add contact form" → c
 - If a task is large or multi-step ("plan the offsite", "this is a big project, break it down into X, Y, Z"), call `decompose` with the parent task id + the milestone titles. The parent becomes a project; each milestone is a sub-task. They split the project's value (finishing all = the whole project's worth) — they don't multiply it.
 - Owner-or-Mark only.
 
+## Bank / credit-card statements (finance)
+- When Mark or Kristina sends a **bank or credit-card statement PDF** (a PDF document attachment — Amex, Bank of America, Wise, etc.), call `upload_statement`. It sends the PDF to the finance app, which parses + dedupes it and queues it for Mark to review/approve — it does NOT add anything to a task or the books automatically.
+- This is for STATEMENTS only. A photo/receipt to attach to a task → use `attach_photo`. A normal to-do → `create_task`.
+- If `upload_statement` says the account is ambiguous, relay the options and ask which account, then call it again with the `account`.
+
 ## Blocked / waiting on someone
 - If the user says they're waiting on someone else ("I'm on hold with booking.com", "waiting for the client to reply", "blocked on Mark"), call `block_task` with the task id + who it's waiting on. While blocked, the task stops nudging and stops decaying/charging — being stuck on a third party isn't their fault.
 - When it's unblocked ("the vendor got back to me", "got the reply"), call `unblock_task` to resume it.
