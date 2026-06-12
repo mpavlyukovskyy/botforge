@@ -4,6 +4,7 @@
  * On-demand progress summary using recent workout data and goals.
  */
 import { ensureDb, getActiveProgram, getActiveGoals, getCachedWorkouts, getRecoveryRange } from '../lib/db.js';
+import { whoopStatusLine } from '../lib/alert-state.js';
 import { callSonnet } from '../lib/claude.js';
 
 export default {
@@ -73,9 +74,10 @@ export default {
       return;
     }
 
+    const banner = whoopStatusLine(ctx.config);
     await ctx.adapter.send({
       chatId,
-      text: result.text,
+      text: banner ? `${banner}\n\n${result.text}` : result.text,
       parseMode: 'Markdown',
     });
   },

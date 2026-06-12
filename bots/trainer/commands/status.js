@@ -4,6 +4,7 @@
  * Quick status: recovery + program week + next workout.
  */
 import { ensureDb, getActiveProgram, getRecoveryForDate } from '../lib/db.js';
+import { whoopStatusLine } from '../lib/alert-state.js';
 
 export default {
   command: 'status',
@@ -23,6 +24,8 @@ export default {
 
     const lines = [];
     lines.push(`*Status — ${dayName}, ${today}*`);
+    const banner = whoopStatusLine(ctx.config);
+    if (banner) lines.push(banner);
     lines.push('');
 
     // Recovery

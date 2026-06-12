@@ -48,7 +48,10 @@ schedule:
     cron: "15 12 * * *"
     timezone: America/New_York
   token_refresh:
-    cron: "*/5 * * * *"
+    # Offset minutes (NOT */5): every other Whoop-touching cron fires on a
+    # 0/5 boundary, and node-cron 3.0.3 silently mangles range-step syntax
+    # like "2-57/5" into multiples of 5 — explicit list only.
+    cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
     timezone: UTC
   conversation_cleanup:
     cron: "0 4 * * *"
