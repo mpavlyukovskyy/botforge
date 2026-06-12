@@ -133,9 +133,16 @@ const server = https.createServer(
         );
       `);
 
+      // ON CONFLICT upsert, not INSERT OR REPLACE — REPLACE deletes+reinserts
+      // the row, silently wiping the bot's status/dead/lock state columns.
       db.prepare(`
-        INSERT OR REPLACE INTO oauth_tokens (provider, access_token, refresh_token, expires_at, updated_at)
+        INSERT INTO oauth_tokens (provider, access_token, refresh_token, expires_at, updated_at)
         VALUES ('whoop', ?, ?, ?, datetime('now'))
+        ON CONFLICT(provider) DO UPDATE SET
+          access_token = excluded.access_token,
+          refresh_token = excluded.refresh_token,
+          expires_at = excluded.expires_at,
+          updated_at = datetime('now')
       `).run(tokens.access_token, tokens.refresh_token || null, expiresAt);
 
       db.close();

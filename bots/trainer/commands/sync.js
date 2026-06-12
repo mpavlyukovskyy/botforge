@@ -24,19 +24,27 @@ export default {
     try {
       await dailySync.execute(ctx);
       const { ensureDb, getRecoveryForDate, getAllExerciseTemplates } = await import('../lib/db.js');
+      const { whoopStatusLine } = await import('../lib/alert-state.js');
       ensureDb(ctx.config);
       const today = new Date().toISOString().slice(0, 10);
       const recovery = getRecoveryForDate(ctx.config, today);
       const readiness = recovery?.combined_readiness || 'unknown';
-      const parts = [];
-      if (recovery?.whoop_recovery_score != null) parts.push(`Whoop ${recovery.whoop_recovery_score}%`);
-      if (recovery?.whoop_hrv != null) parts.push(`HRV ${Math.round(recovery.whoop_hrv)}ms`);
-      if (recovery?.eightsleep_sleep_score != null) parts.push(`8Sleep ${recovery.eightsleep_sleep_score}`);
-      const summary = parts.length > 0 ? parts.join(' | ') : 'No data returned';
+
+      // Per-source outcomes — never claim "complete" when a source is down.
+      const whoopBanner = whoopStatusLine(ctx.config);
+      const whoopLine = whoopBanner
+        ? `Whoop: ${whoopBanner}`
+        : recovery?.whoop_recovery_score != null
+          ? `Whoop: ${recovery.whoop_recovery_score}%${recovery.whoop_hrv != null ? ` | HRV ${Math.round(recovery.whoop_hrv)}ms` : ''}`
+          : 'Whoop: no data returned';
+      const eightLine = recovery?.eightsleep_sleep_score != null
+        ? `8Sleep: ${recovery.eightsleep_sleep_score}`
+        : '8Sleep: no data';
       const templateCount = getAllExerciseTemplates(ctx.config).length;
+      const header = whoopBanner ? 'Sync finished (Whoop degraded).' : 'Sync complete.';
       await ctx.adapter.send({
         chatId,
-        text: `Sync complete. Readiness: ${readiness}\n${summary}\nHevy templates: ${templateCount}`,
+        text: `${header} Readiness: ${readiness}\n${whoopLine}\n${eightLine}\nHevy templates: ${templateCount}`,
       });
     } catch (err) {
       lastSyncByChat.delete(chatId);
