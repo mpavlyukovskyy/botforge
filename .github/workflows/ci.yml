@@ -17,6 +17,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: pnpm -r --if-present run typecheck
+      - name: Tests (trainer)
+        run: npx vitest run bots/trainer
       - name: Lint (non-blocking)
         continue-on-error: true
         run: pnpm -r --if-present run lint
