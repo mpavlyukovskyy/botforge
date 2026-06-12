@@ -18,8 +18,17 @@
 #   scp infra/fleet-watchdog.sh acemagic:/tmp/ && ssh acemagic \
 #     "sudo cp /tmp/fleet-watchdog.sh /opt/health-probes/ && sudo chmod +x /opt/health-probes/fleet-watchdog.sh"
 #
+# Ownership split (one owner per concern — kristina precedent):
+#   fleet-watchdog  = service-up checks + Whoop data freshness (below)
+#   Uptime Kuma     = process heartbeat push
+#   kristina-probe  = kristina only (excluded here)
+#
 # Usage: fleet-watchdog.sh [--selftest]
 #   --selftest  send a test DM to verify the alert channel, then exit
+#
+# Kill-test overrides (exercise the deployed artifact without touching prod):
+#   WHOOP_DB_OVERRIDE=/tmp/copy.db WHOOP_STALE_HOURS_OVERRIDE=0 ./fleet-watchdog.sh
+#   TG_DRYRUN=1 prints alerts to stdout instead of sending.
 
 set -u
 
@@ -50,6 +59,10 @@ FLEET=(
 )
 
 send_tg() {
+  if [ "${TG_DRYRUN:-0}" = "1" ]; then
+    echo "TG_DRYRUN: $1"
+    return 0
+  fi
   curl -sS --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=${ALERT_CHAT}" \
     --data-urlencode "text=$1" >/dev/null 2>&1 || true
@@ -91,6 +104,73 @@ for entry in "${FLEET[@]}"; do
     fi
   fi
 done
+
+# --- trainer Whoop data freshness (shipping-rule outside-the-bot check) -----
+# Two conditions against the LIVE bot DB (read-only — never takes write locks):
+#  (a) bot-wedged: token marked dead >1h ago but the bot never managed to send
+#      its own death alert (alert key absent from bot_state). The bot's
+#      observation-based alerting normally covers death within 5 min; this
+#      fires only when the bot itself is broken.
+#  (b) staleness: no Whoop recovery score in WHOOP_STALE_HOURS (72h default —
+#      tolerates strap-off weekends), suppressed while any whoop_* alert key
+#      is set (the bot is already alerting; one nag per condition).
+# dead_at and alert-state timestamps are JS epoch SECONDS (pinned by
+# bots/trainer/tests/probe-sql.test.js against this same SQL).
+WHOOP_DB="${WHOOP_DB_OVERRIDE:-/opt/botforge/data/Trainer-trainer.db}"
+WHOOP_STALE_HOURS="${WHOOP_STALE_HOURS_OVERRIDE:-72}"
+WHOOP_ALERT_STATE="${STATE_DIR}/trainer-whoop-freshness-alert.txt"
+
+check_whoop_freshness() {
+  [ -f "$WHOOP_DB" ] || { echo "whoop-freshness: DB not found at $WHOOP_DB" >&2; return; }
+  command -v sqlite3 >/dev/null || return
+
+  local now reason="" dead_row dead_at status alert_key_count
+  now=$(date -u +%s)
+
+  dead_row=$(sqlite3 -readonly "$WHOOP_DB" \
+    "SELECT status || '|' || COALESCE(dead_at,0) FROM oauth_tokens WHERE provider='whoop'" 2>/dev/null || echo "")
+  status="${dead_row%%|*}"
+  dead_at="${dead_row##*|}"
+
+  alert_key_count=$(sqlite3 -readonly "$WHOOP_DB" \
+    "SELECT COUNT(*) FROM bot_state WHERE key LIKE 'whoop_%' AND value != ''" 2>/dev/null || echo "0")
+
+  if [ "$status" = "dead" ] && [ "${dead_at:-0}" -gt 0 ] && [ $(( now - dead_at )) -gt 3600 ]; then
+    local dead_key_present
+    dead_key_present=$(sqlite3 -readonly "$WHOOP_DB" \
+      "SELECT COUNT(*) FROM bot_state WHERE key='whoop_token_dead' AND value != ''" 2>/dev/null || echo "0")
+    if [ "$dead_key_present" = "0" ]; then
+      reason="trainer marked Whoop token DEAD $(( (now - dead_at) / 3600 ))h ago but never alerted (bot wedged?)"
+    fi
+  fi
+
+  if [ -z "$reason" ] && [ "$alert_key_count" = "0" ]; then
+    local last_score_age_h
+    last_score_age_h=$(sqlite3 -readonly "$WHOOP_DB" "
+      SELECT CAST(($now - strftime('%s', MAX(date) || 'T12:00:00Z')) / 3600 AS INTEGER)
+      FROM recovery_daily WHERE whoop_recovery_score IS NOT NULL" 2>/dev/null || echo "")
+    if [ -n "$last_score_age_h" ] && [ "$last_score_age_h" != "" ] && [ "$last_score_age_h" -gt "$(( WHOOP_STALE_HOURS ))" ] 2>/dev/null; then
+      reason="no Whoop recovery data for ${last_score_age_h}h (threshold ${WHOOP_STALE_HOURS}h) and trainer is not alerting about it"
+    fi
+  fi
+
+  if [ -z "$reason" ]; then
+    if [ -f "$WHOOP_ALERT_STATE" ]; then
+      send_tg "✅ trainer Whoop freshness recovered @ ${NOW_UTC}."
+      rm -f "$WHOOP_ALERT_STATE"
+    fi
+  else
+    local last
+    last=$(cat "$WHOOP_ALERT_STATE" 2>/dev/null || echo "")
+    if [ "$last" != "$HOUR_KEY" ]; then
+      echo "$HOUR_KEY" > "$WHOOP_ALERT_STATE"
+      send_tg "🚨 trainer Whoop freshness @ ${NOW_UTC} — ${reason}. Inspect: ssh acemagic \"sqlite3 -readonly ${WHOOP_DB} 'SELECT status,dead_reason,dead_at FROM oauth_tokens'\""
+      echo "alerted: whoop-freshness ${reason}"
+    fi
+  fi
+}
+
+check_whoop_freshness
 
 # --- mp-finance-db backup staleness (secondary, on-box layer) ---------------
 # Primary dead-man's switch is the off-box Uptime Kuma push from backup.sh (it
