@@ -34,7 +34,7 @@
     "@botforge/skill-backup": "workspace:*",
     "@botforge/skill-workspace-monitor": "workspace:*",
     "commander": "^13.0.0",
-    "yaml": "^2.7.0"
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "tsup": "^8.0.0",
