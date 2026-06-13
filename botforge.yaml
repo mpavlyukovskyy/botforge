@@ -21,10 +21,16 @@ bots:
     config: bots/maia.yaml
     service: botforge-maia
     port: 3100
-  harry:
-    config: bots/harry.yaml
-    service: botforge-harry
-    port: 8082
+  # harry: TOMBSTONED 2026-06-12 — the live Harry is the standalone lp-bot
+  # service (dev/bots/nzvc-lp-bot → acemagic /opt/lp-bot). This port was a
+  # stale May-10 mirror and was never deployed. Do NOT resurrect without the
+  # trust-rebuild plan's S28 decision gate (nzvc-lp-bot
+  # docs/trust-rebuild-2026-06-12/PLAN.md). Config kept at
+  # bots/harry.yaml.DORMANT.
+  # harry:
+  #   config: bots/harry.yaml
+  #   service: botforge-harry
+  #   port: 8082
   babushka:
     config: bots/babushka.yaml
     service: botforge-babushka
