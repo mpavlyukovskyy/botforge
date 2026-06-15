@@ -61,6 +61,13 @@ resilience:
     backoff: exponential
     transient_codes: [429, 502, 503]
 
+# When the LLM is unavailable (budget cap / auth / overload / network), still
+# capture the user's message as a task via create_task so it's never dropped.
+# create_task already dedups, saves locally, and syncs to Atlas idempotently.
+fallback_capture:
+  enabled: true
+  tool: create_task
+
 schedule:
   daily_digest:
     cron: "30 8 * * *"

@@ -110,6 +110,16 @@ const ResilienceSchema = z.object({
   retry: RetrySchema.optional(),
 });
 
+// ─── Fallback capture ────────────────────────────────────────────────────────
+// When the brain (LLM) is unavailable (budget cap / auth / overload / network),
+// deterministically capture the user's message as a task via a named tool so it
+// is never silently dropped. Opt-in per bot (default off) so bots that aren't
+// task managers are unaffected.
+const FallbackCaptureSchema = z.object({
+  enabled: z.boolean().default(false),
+  tool: z.string().default('create_task').describe('Registry tool to invoke with {title} on LLM-unavailable failures'),
+});
+
 // ─── Schedule ────────────────────────────────────────────────────────────────
 
 const CronJobSchema = z.object({
@@ -299,6 +309,7 @@ export const BotConfigSchema = z.object({
 
   memory: MemorySchema.optional(),
   resilience: ResilienceSchema.optional(),
+  fallback_capture: FallbackCaptureSchema.optional(),
   schedule: ScheduleSchema.optional(),
   integrations: z.record(IntegrationSchema).optional(),
   health: HealthSchema.optional(),
