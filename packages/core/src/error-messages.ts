@@ -136,6 +136,17 @@ export function renderError(
   }
 }
 
+/**
+ * Classes that mean "the LLM is unavailable" (vs. a local/tool/oversized-input
+ * problem). Only these warrant deterministic fallback capture — db_error /
+ * tool_error / context_too_long / cli_failure / unknown do NOT (a local insert
+ * may also fail, a tool may have partially run, or we'd be guessing).
+ */
+export const LLM_UNAVAILABLE_CLASSES = new Set<ErrorClass>([
+  'credit_balance', 'usage_limit', 'payment_required', 'auth', 'permission',
+  'overloaded', 'rate_limited', 'server_error', 'network', 'brain_timeout',
+]);
+
 const ADMIN_NOTIFY_THROTTLE_MS = 30 * 60 * 1000;
 
 /** Error classes only an admin can fix — these alert; transient classes don't. */

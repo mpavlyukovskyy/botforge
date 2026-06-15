@@ -28,7 +28,8 @@ import { askBrainCli } from './brain-cli.js';
 import { askGemini } from './brain-gemini.js';
 import { storeAccess } from './bot-store.js';
 import type { BotInstance, MessageProcessor } from './runtime.js';
-import { classifyError, renderError, shortRef, maybeNotifyAdmin } from './error-messages.js';
+import { classifyError, renderError, shortRef, maybeNotifyAdmin, LLM_UNAVAILABLE_CLASSES } from './error-messages.js';
+import { looksLikeTask, heuristicTaskTitle } from './heuristic-capture.js';
 
 /**
  * Load system prompt — inline string > file > default fallback.
@@ -326,6 +327,33 @@ export function createBrainProcessor(
         store: inst.store,
         log,
       });
+
+      // Fallback capture (opt-in): when the LLM is unavailable, deterministically
+      // persist the user's message as a task via a named tool so it is NEVER
+      // silently dropped. Gated on config + an intent check so questions/acks
+      // don't become junk tasks. Fully isolated — a failure here must not break
+      // the error-reply path.
+      const fc = (config as { fallback_capture?: { enabled?: boolean; tool?: string } }).fallback_capture;
+      if (
+        fc?.enabled &&
+        LLM_UNAVAILABLE_CLASSES.has(errorClass) &&
+        looksLikeTask(message.text)
+      ) {
+        try {
+          const toolName = fc.tool || 'create_task';
+          const tool = toolRegistry.get(toolName);
+          if (tool) {
+            const title = heuristicTaskTitle(message.text ?? '');
+            await tool.execute({ title }, toolCtx);
+            responseText += `\n\n📝 I saved this as a task anyway (no AI parsing — tap Edit to fix): ${title}`;
+            log.info(`Fallback capture: saved task "${title}" via ${toolName} after ${errorClass}`);
+          } else {
+            log.warn(`Fallback capture configured tool "${toolName}" not found in registry`);
+          }
+        } catch (capErr) {
+          log.warn(`Fallback capture failed: ${capErr instanceof Error ? capErr.message : String(capErr)}`);
+        }
+      }
     }
 
     // Send response (via response-formatter if available)
