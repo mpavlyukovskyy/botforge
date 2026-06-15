@@ -160,7 +160,10 @@ function installCanaryFramework(io: DeployIO, sha: string, fwBaseDir: string): v
   }
 
   console.log(`  Installing canary framework at ${remotePath}...`);
-  io.runRemote(`sudo mkdir -p ${remotePath} && sudo chown $(whoami) ${remotePath}`);
+  // NB: escape the command substitution so `whoami` runs on the REMOTE host
+  // (the deploy user there, e.g. "m"), not locally (which would yield the local
+  // username and fail with `chown: invalid user`).
+  io.runRemote(`sudo mkdir -p ${remotePath} && sudo chown \\$(whoami) ${remotePath}`);
   // Ship source/dist/lockfiles only — install happens remotely against the
   // shared pnpm store on acemagic.
   io.scp(

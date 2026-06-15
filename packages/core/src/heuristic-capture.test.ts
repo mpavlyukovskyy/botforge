@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { looksLikeTask, heuristicTaskTitle, stripBotMention } from './heuristic-capture.js';
-import { LLM_UNAVAILABLE_CLASSES } from './error-messages.js';
+import { LLM_UNAVAILABLE_CLASSES, type ErrorClass } from './error-messages.js';
 
 describe('stripBotMention', () => {
   it('strips a known bot username anywhere', () => {
@@ -62,12 +62,14 @@ describe('heuristicTaskTitle', () => {
 
 describe('LLM_UNAVAILABLE_CLASSES gate', () => {
   it('includes the AI-down classes', () => {
-    for (const c of ['credit_balance', 'usage_limit', 'auth', 'overloaded', 'rate_limited', 'network', 'brain_timeout']) {
+    const classes: ErrorClass[] = ['credit_balance', 'usage_limit', 'auth', 'overloaded', 'rate_limited', 'network', 'brain_timeout'];
+    for (const c of classes) {
       assert.equal(LLM_UNAVAILABLE_CLASSES.has(c), true);
     }
   });
   it('EXCLUDES classes where capture would be wrong (db/tool/oversized/unknown)', () => {
-    for (const c of ['db_error', 'tool_error', 'context_too_long', 'cli_failure', 'unknown']) {
+    const classes: ErrorClass[] = ['db_error', 'tool_error', 'context_too_long', 'cli_failure', 'unknown'];
+    for (const c of classes) {
       assert.equal(LLM_UNAVAILABLE_CLASSES.has(c), false);
     }
   });
