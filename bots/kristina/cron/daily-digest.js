@@ -5,6 +5,7 @@
  */
 import { getItems, getColumns } from '../lib/atlas-client.js';
 import { getAllRegisteredChats, storeMessageRefs } from '../lib/db.js';
+import { sendWithMarkdownFallback } from '../lib/safe-send.js';
 
 export default {
   name: 'daily_digest',
@@ -79,10 +80,9 @@ export default {
         // Truncate if too long
         if (text.length > 3800) text = text.slice(0, 3800) + '\n...';
 
-        const msgId = await ctx.adapter.send({
+        const msgId = await sendWithMarkdownFallback(ctx, {
           chatId: chat.chat_id,
           text,
-          parseMode: 'Markdown',
         });
 
         if (msgId && refs.length > 0) {
