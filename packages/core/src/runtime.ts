@@ -26,6 +26,16 @@ export type AdapterFactory = (config: BotConfig, log: Logger) => PlatformAdapter
 export type SkillFactory = (name: string) => Promise<Skill>;
 export type MessageProcessor = (message: IncomingMessage, context: BotInstance) => Promise<void>;
 
+/**
+ * The message id a callback handler should edit/delete in response to a tap.
+ * Prefer the host message that carries the keyboard (`callbackMessageId`);
+ * fall back to `id` only for adapters that don't resolve it. Using `id` (the
+ * callback-query id) for adapter.edit raises "message to edit not found".
+ */
+export function resolveCallbackMessageId(callback: IncomingMessage): string {
+  return callback.callbackMessageId ?? callback.id;
+}
+
 /** Lifecycle hook loaded from bot directory */
 export interface LifecycleHook {
   event: 'start' | 'stop';
@@ -497,7 +507,7 @@ export async function startBot(configPath: string, options: BotForgeOptions): Pr
       if (handler) {
         const ctx: CallbackContext = {
           ...buildModuleContext(callback, instance),
-          messageId: callback.id,
+          messageId: resolveCallbackMessageId(callback),
           answerCallback: callback.answerCallback ?? (async () => {}),
         };
         try {

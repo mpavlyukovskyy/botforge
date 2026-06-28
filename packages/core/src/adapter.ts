@@ -24,6 +24,14 @@ export interface IncomingMessage {
   };
   /** Callback data for inline keyboards */
   callbackData?: string;
+  /**
+   * For callback (inline-button) messages: the id of the HOST message that
+   * carries the keyboard — i.e. the message to edit/delete in response to the
+   * tap. Distinct from `id`, which for a callback is the callback-query id
+   * (needed only to answer the query). Adapters that can resolve the host
+   * message set this; consumers use it for adapter.edit/delete.
+   */
+  callbackMessageId?: string;
   /** Answer callback query with optional toast text (Telegram-specific) */
   answerCallback?: (text?: string) => Promise<void>;
   /** Is this a group message? */
