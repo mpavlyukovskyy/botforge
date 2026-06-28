@@ -157,6 +157,20 @@ export class ToolRegistry {
  * Load tool modules from a directory.
  * Tries .js first (production), falls back to .ts (development with tsx).
  */
+/**
+ * A tool-directory entry is loadable as a tool only if it's a .js/.ts source
+ * file that is NOT a type declaration or a test/spec file. Bots whose tools/
+ * dir ships vitest test files (e.g. kristina's get_balance.test.js) would
+ * otherwise import them as tools and throw at runtime trying to load vitest.
+ */
+export function isLoadableToolFile(f: string): boolean {
+  return (
+    (f.endsWith('.js') || f.endsWith('.ts')) &&
+    !f.endsWith('.d.ts') &&
+    !/\.(test|spec)\.(ts|js)$/.test(f)
+  );
+}
+
 export async function loadToolsFromDir(dir: string): Promise<ToolImplementation[]> {
   let files: string[];
   try {
@@ -165,9 +179,7 @@ export async function loadToolsFromDir(dir: string): Promise<ToolImplementation[
     return [];
   }
 
-  const toolFiles = files.filter(f =>
-    (f.endsWith('.js') || f.endsWith('.ts')) && !f.endsWith('.d.ts') && !f.endsWith('.test.ts')
-  );
+  const toolFiles = files.filter(isLoadableToolFile);
 
   const tools: ToolImplementation[] = [];
 
