@@ -524,6 +524,11 @@ export class TelegramAdapter implements PlatformAdapter {
       text: query.data,
       type: 'callback',
       callbackData: query.data,
+      // The host message that carries the tapped keyboard — this is what
+      // handlers edit/delete. `id` above is the callback-query id (used only
+      // to answerCallbackQuery), NOT the message id, so it must not be reused
+      // for edits.
+      callbackMessageId: hostMessageIdFromCallback(query),
       isGroup: query.message.chat.type === 'group' || query.message.chat.type === 'supergroup',
       timestamp: new Date(query.message.date * 1000),
       raw: query,
@@ -533,4 +538,15 @@ export class TelegramAdapter implements PlatformAdapter {
 
 export function createTelegramAdapter(config: BotConfig, log: Logger): PlatformAdapter {
   return new TelegramAdapter(config, log);
+}
+
+/**
+ * Resolve the id of the message that hosts a tapped inline keyboard. This is
+ * the message a callback handler edits/deletes — NOT query.id (the
+ * callback-query id). Exported for regression testing of that distinction.
+ */
+export function hostMessageIdFromCallback(
+  query: TelegramBot.CallbackQuery,
+): string | undefined {
+  return query.message ? String(query.message.message_id) : undefined;
 }
