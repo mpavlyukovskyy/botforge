@@ -205,3 +205,32 @@ else
     send_tg "🚨 mp-finance-db BACKUP problem @ ${NOW_UTC} — ${MPF_REASON}. The Atlas/comp+finance DB may be unprotected. Check: journalctl -u mp-finance-backup -n 50; cat ${MPF_STATE}"
   fi
 fi
+
+# ─── Callback inline-button EDIT-FAILURE probe ───────────────────────────────
+# The dead-observer fix for the Jun-2026 Findlays order-ack bug: every inline-
+# button edit failed "400 message to edit not found" for ~2 weeks (8 acks)
+# because the running framework dist resolved messageId from the callback-query
+# id, and nothing watched. A bot can RECORD an action while its visible
+# confirmation silently fails — logs aren't a check. Watch the edit error
+# directly, across the fleet, over a rolling window ≥ the 5-min cron interval.
+EDIT_FAIL_ALERT="${STATE_DIR}/callback-edit-fail-alert.txt"
+EDIT_FAIL_SINCE=$(date -u -d '65 minutes ago' '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+EDIT_FAIL_HITS=""
+if [ -n "$EDIT_FAIL_SINCE" ]; then
+  for SVC in botforge-hali99 botforge-kristina botforge-maia botforge-trainer; do
+    N=$(journalctl -u "$SVC" --since "$EDIT_FAIL_SINCE" --no-pager 2>/dev/null | grep -c "message to edit not found")
+    [ "${N:-0}" -gt 0 ] && EDIT_FAIL_HITS="${EDIT_FAIL_HITS}${SVC#botforge-}:${N} "
+  done
+fi
+if [ -z "$EDIT_FAIL_HITS" ]; then
+  if [ -f "$EDIT_FAIL_ALERT" ]; then
+    send_tg "✅ Bot button-edits recovered @ ${NOW_UTC} — no 'message to edit not found' in last 65min."
+    rm -f "$EDIT_FAIL_ALERT"
+  fi
+else
+  LAST=$(cat "$EDIT_FAIL_ALERT" 2>/dev/null || echo "")
+  if [ "$LAST" != "$HOUR_KEY" ]; then
+    echo "$HOUR_KEY" > "$EDIT_FAIL_ALERT"
+    send_tg "🚨 Bot inline-button edits FAILING @ ${NOW_UTC} — 'message to edit not found': ${EDIT_FAIL_HITS}. Acks/approvals RECORD but show no confirmation (likely stale framework dist / messageId resolution). Check: journalctl -u botforge-<bot> | grep 'edit failed'"
+  fi
+fi
